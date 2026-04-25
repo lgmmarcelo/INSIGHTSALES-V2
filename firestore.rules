@@ -1,0 +1,114 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Safety Net
+    match /{document=**} {
+        // God-mode for the founder to prevent any bootstrap lockouts
+        allow read, write: if request.auth != null && request.auth.token.email == 'marcelo@laghettomultipropriedade.com.br';
+        allow read, write: if false;
+    }
+
+    // Primitives
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null; }
+    function isValidId(id) { 
+        return id is string && id.size() > 0 && id.size() <= 128; 
+    }
+
+    // A user exists if they are in the users collection
+    function isRegisteredUser() {
+        return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    // Role-Based Access Control via `users` collection lookup
+    function getUserRole() {
+        // Use ternary to prevent calling get() on a non-existent document, which throws a rules evaluation error
+        return isRegisteredUser() ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role : 'none';
+    }
+
+    function isAdmin() {
+        return getUserRole() == 'admin';
+    }
+
+    function isAnalyst() {
+        return getUserRole() == 'analyst';
+    }
+
+    function isViewer() {
+        return getUserRole() == 'viewer';
+    }
+
+    // --- Entity Blueprint Validation ---
+
+    function isValidUser(data) {
+        return data.keys().hasAll(['email', 'role', 'createdAt']) && 
+               data.keys().size() == 3 &&
+               data.email is string && data.email.size() <= 200 &&
+               data.role is string && data.role.size() <= 20 &&
+               data.createdAt is number;
+    }
+
+    function isValidSale(data) {
+        // Enforcing core keys. Optional columns and manual input columns are omitted from hasAll
+        return data.keys().hasAll([
+                 'localizador', 'dataAtendimento', 'cpf', 'statusContrato', 'uploadedAt'
+               ]) &&
+               data.localizador is string && data.localizador.size() <= 100 &&
+               data.dataAtendimento is string && data.dataAtendimento.size() <= 20 &&
+               data.cpf is string && data.cpf.size() <= 20 &&
+               data.statusContrato is string && data.statusContrato.size() <= 60 &&
+               data.uploadedAt is number;
+    }
+
+    // --- Path Rules ---
+
+    match /users/{userId} {
+        // Only Admins can list and read all users
+        allow list: if isAdmin();
+        
+        // A user can always read their own profile, without triggering other lookups
+        allow get: if request.auth != null && request.auth.uid == userId;
+
+        // Creating their own user document if they are the owner
+        allow create: if request.auth != null && request.auth.uid == userId && 
+            incoming().email == 'marcelo@laghettomultipropriedade.com.br' && 
+            incoming().role == 'admin';
+
+        // An Admin can also create users
+        allow create: if isAdmin() && isValidUser(incoming());
+
+        // UPDATE
+        allow update: if isValidId(userId) && isValidUser(incoming()) && isAdmin() &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['role', 'email', 'createdAt']);
+
+        // DELETE
+        allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    match /sales/{saleId} {
+        // Read: Any registered user (Admin, Analyst, Viewer)
+        allow list: if isRegisteredUser();
+        allow get: if isValidId(saleId) && isRegisteredUser();
+
+        // Create: Admin or Analyst can insert Excel data
+        allow create: if isValidId(saleId) && isValidSale(incoming()) && (isAdmin() || isAnalyst());
+
+        // Update: 
+        // Analyst: ONLY can update cancellation manual fields.
+        // Admin: Can update manual fields, maybe fix other fields if needed.
+        allow update: if isValidId(saleId) && isValidSale(incoming()) && isRegisteredUser() && (
+            isAdmin() || 
+            (
+                isAnalyst() && 
+                incoming().diff(existing()).affectedKeys().hasOnly(['dataCancelamento', 'cotasCanceladas', 'cotasRetidas'])
+            )
+        );
+
+        // Delete: Only Admin
+        allow delete: if isValidId(saleId) && isAdmin();
+    }
+  }
+}

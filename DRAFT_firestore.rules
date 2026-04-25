@@ -1,0 +1,120 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Safety Net
+    match /{document=**} {
+        allow read, write: if false;
+    }
+
+    // Primitives
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null; }
+    function isValidId(id) { 
+        return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); 
+    }
+
+    // Role-Based Access Control via `users` collection lookup
+    // Using exists() and get() for trusted database check.
+    function getUserRole() {
+        return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+    
+    // A user exists if they are in the users collection
+    function isRegisteredUser() {
+        return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isAdmin() {
+        return isRegisteredUser() && getUserRole() == 'admin';
+    }
+
+    function isAnalyst() {
+        return isRegisteredUser() && getUserRole() == 'analyst';
+    }
+
+    function isViewer() {
+        return isRegisteredUser() && getUserRole() == 'viewer';
+    }
+
+    // --- Entity Blueprint Validation ---
+
+    function isValidUser(data) {
+        return data.keys().hasAll(['email', 'role', 'createdAt']) && 
+               data.keys().size() == 3 &&
+               data.email is string && data.email.size() <= 200 &&
+               data.role is string && data.role.size() <= 20 &&
+               data.createdAt is number;
+    }
+
+    function isValidSale(data) {
+        // Enforcing keys directly on Create where 'data' is map of entire object
+        // Some columns from Excel might be missing, so we only enforce base keys.
+        return data.keys().hasAll([
+                 'cpfDataKey', 'dataAtendimento', 'cliente', 'cpf', 
+                 'houveVenda', 'quantVenda', 'cotasCanceladas', 'cotasRetidas', 'uploadedAt'
+               ]) &&
+               data.cpfDataKey is string && data.cpfDataKey.size() <= 100 &&
+               data.dataAtendimento is string && data.dataAtendimento.size() <= 20 &&
+               data.cliente is string && data.cliente.size() <= 250 &&
+               data.cpf is string && data.cpf.size() <= 20 &&
+               data.houveVenda is string && data.houveVenda.size() <= 10 &&
+               data.quantVenda is number &&
+               data.cotasCanceladas is number &&
+               data.cotasRetidas is number &&
+               data.uploadedAt is number &&
+               (data.get('dataCancelamento', '') is string); // optional field safely typed
+    }
+
+    // --- Path Rules ---
+
+    match /users/{userId} {
+        // Only Admins can list and read all users
+        allow list: if isAdmin();
+        
+        // A user can read their own profile OR Admins can read
+        allow get: if isValidId(userId) && (isAdmin() || request.auth.uid == userId);
+
+        // CREATE: Only Admin can create new users OR Bootstrapped Admin initial creation?
+        // Let's assume an Admin always creates users, or we allow a specific verified email to bootstrap.
+        allow create: if isValidId(userId) && isValidUser(incoming()) && (
+            isAdmin() || 
+            // Bootstrap back-door for my specific owner email to seed the first admin
+            (incoming().email == 'marcelo@laghettomultipropriedade.com.br' && incoming().role == 'admin')
+        );
+
+        // UPDATE: Only Admins can modify users.
+        // Users CANNOT escalate their own role.
+        allow update: if isValidId(userId) && isValidUser(incoming()) && isAdmin() &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['role', 'email']);
+
+        // DELETE: Only Admins
+        allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    match /sales/{saleId} {
+        // Read: Any registered user (Admin, Analyst, Viewer)
+        allow list: if isRegisteredUser();
+        allow get: if isValidId(saleId) && isRegisteredUser();
+
+        // Create: Admin or Analyst can insert Excel data
+        allow create: if isValidId(saleId) && isValidSale(incoming()) && (isAdmin() || isAnalyst());
+
+        // Update: 
+        // Analyst: ONLY can update cancellation manual fields.
+        // Admin: Can update manual fields, maybe fix other fields if needed.
+        allow update: if isValidId(saleId) && isValidSale(incoming()) && isRegisteredUser() && (
+            isAdmin() || 
+            (
+                isAnalyst() && 
+                incoming().diff(existing()).affectedKeys().hasOnly(['dataCancelamento', 'cotasCanceladas', 'cotasRetidas'])
+            )
+        );
+
+        // Delete: Only Admin
+        allow delete: if isValidId(saleId) && isAdmin();
+    }
+  }
+}

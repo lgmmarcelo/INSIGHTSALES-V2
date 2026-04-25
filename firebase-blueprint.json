@@ -1,0 +1,63 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "System users with Role Based Access Control",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "description": "User email address" },
+        "role": { "type": "string", "enum": ["admin", "analyst", "viewer"], "description": "Access level" },
+        "createdAt": { "type": "number", "description": "Creation timestamp" }
+      },
+      "required": ["email", "role", "createdAt"]
+    },
+    "Sale": {
+      "title": "Excel Sale & Attendance Record",
+      "description": "Merged data from Excel imports and manual input",
+      "type": "object",
+      "properties": {
+        "cpfDataKey": { "type": "string", "description": "Composite key: CPF_DATA" },
+        "dataAtendimento": { "type": "string", "description": "Column D YYYY-MM-DD" },
+        "cliente": { "type": "string", "description": "Column F" },
+        "cpf": { "type": "string", "description": "Column G" },
+        "idade1": { "type": "string" },
+        "idade2": { "type": "string" },
+        "profissao1": { "type": "string" },
+        "profissao2": { "type": "string" },
+        "estadoCivil": { "type": "string" },
+        "renda": { "type": "string" },
+        "cidade": { "type": "string" },
+        "estado": { "type": "string" },
+        "possuiVeiculo": { "type": "string" },
+        "anoVeiculo": { "type": "string" },
+        "possuiCasaPropria": { "type": "string" },
+        "pontoCaptacao": { "type": "string" },
+        "sala": { "type": "string" },
+        "status": { "type": "string" },
+        "houveVenda": { "type": "string", "enum": ["Sim", "Não", ""] },
+        "quantVenda": { "type": "number" },
+        "captador": { "type": "string" },
+        "consultor": { "type": "string" },
+        "to": { "type": "string" },
+        "dataCancelamento": { "type": "string" },
+        "cotasCanceladas": { "type": "number" },
+        "cotasRetidas": { "type": "number" },
+        "uploadedAt": { "type": "number" }
+      },
+      "required": [
+        "cpfDataKey", "dataAtendimento", "cliente", "cpf", "houveVenda", 
+        "quantVenda", "cotasCanceladas", "cotasRetidas", "uploadedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Stores user RBAC profiles"
+    },
+    "/sales/{saleId}": {
+      "schema": { "$ref": "#/entities/Sale" },
+      "description": "Stores sales and cancelation records"
+    }
+  }
+}
