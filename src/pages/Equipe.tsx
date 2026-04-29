@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { collection, query, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { differenceInDays, parseDateLocal } from '../lib/utils';
+import { Sale } from '../types';
 
 interface TeamMetric {
   name: string;
@@ -12,7 +13,7 @@ interface TeamMetric {
 }
 
 export default function Equipe() {
-  const [rawSales, setRawSales] = useState<any[]>([]);
+  const [rawSales, setRawSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Date filtering state
@@ -71,9 +72,9 @@ export default function Equipe() {
     try {
       const q = query(collection(db, 'sales'));
       const querySnapshot = await getDocs(q);
-      const data: any[] = [];
+      const data: Sale[] = [];
       querySnapshot.forEach((doc) => {
-        data.push({ id: doc.id, ...doc.data() });
+        data.push({ id: doc.id, ...doc.data() } as Sale);
       });
       setRawSales(data);
     } catch (error) {

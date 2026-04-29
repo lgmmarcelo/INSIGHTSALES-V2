@@ -4,6 +4,7 @@ import { db } from '../lib/firebase';
 import { parseDateLocal } from '../lib/utils';
 import { MapPin, XCircle, Store } from 'lucide-react';
 import { differenceInDays } from 'date-fns';
+import { Sale } from '../types';
 
 interface PontoStats {
   brutas: number;
@@ -18,7 +19,7 @@ interface SalaStats {
 }
 
 export default function PontosCaptacao() {
-  const [rawSales, setRawSales] = useState<any[]>([]);
+  const [rawSales, setRawSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Date filtering state
@@ -50,9 +51,9 @@ export default function PontosCaptacao() {
     try {
       const q = query(collection(db, 'sales'));
       const querySnapshot = await getDocs(q);
-      const data: any[] = [];
+      const data: Sale[] = [];
       querySnapshot.forEach((doc) => {
-        data.push({ id: doc.id, ...doc.data() });
+        data.push({ id: doc.id, ...doc.data() } as Sale);
       });
       setRawSales(data);
     } catch (error) {

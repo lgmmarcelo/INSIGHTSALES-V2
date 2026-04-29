@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useMemo, Fragment } from 'react';
-import { collection, query, getDocs, updateDoc, doc, limit, where } from 'firebase/firestore';
+import { updateDoc, doc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../context/AuthContext';
 import { parseDateLocal } from '../lib/utils';
-import { Upload, ArrowUpDown, ChevronUp, ChevronDown, ChevronRight, Search, X } from 'lucide-react';
+import { Upload, ArrowUpDown, ChevronUp, ChevronDown, ChevronRight, Search, X, Save, Check } from 'lucide-react';
+import { Sale } from '../types';
+import { useSalesData } from '../hooks/useSalesData';
+import { SkeletonTable } from '../components/ui/SkeletonTable';
 
 export default function Atendimentos() {
-  const { userRole } = useAuth();
-  const [rawSales, setRawSales] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { userRole, userPermissions, currentUser } = useAuth();
   const [sortConfig, setSortConfig] = useState<{key: string, direction: 'asc' | 'desc'} | null>(null);
 
   // Date filtering state
@@ -19,6 +20,8 @@ export default function Atendimentos() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   
+  const { rawSales, loading, mutate } = useSalesData(startDate, endDate);
+
   // Search state
   const [searchTerm, setSearchTerm] = useState('');
   
@@ -52,43 +55,6 @@ export default function Atendimentos() {
   const handleEndDateChange = (val: string) => {
     setEndDate(val);
     setMonthSelection('');
-  };
-
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      // By default, do not fetch the entire database to avoid quota explosions.
-      // E.g., if we have 20000 rows, fetching all consumes 20k reads per click.
-      const constraints: any[] = [];
-      if (startDate) {
-        constraints.push(where("dataAtendimentoIso", ">=", startDate));
-      }
-      if (endDate) {
-        constraints.push(where("dataAtendimentoIso", "<=", endDate));
-      }
-
-      // If no date filters are set at all, we limit to the last 2000 to prevent quota wipe out.
-      // Ideally we force a default date range (e.g., current month)
-      const q = constraints.length > 0
-        ? query(collection(db, 'sales'), ...constraints)
-        : query(collection(db, 'sales'), limit(1500));
-
-      const querySnapshot = await getDocs(q);
-      const data: any[] = [];
-      querySnapshot.forEach((doc) => {
-        data.push({ id: doc.id, ...doc.data() });
-      });
-      // All items in the new schema are confirmed contracts
-      setRawSales(data);
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setLoading(false);
-    }
   };
 
   // Filter logic
@@ -147,12 +113,14 @@ export default function Atendimentos() {
       g.quantVenda += 1;
       g.faturamento += (sale.valor || 0);
 
-      const isCanceled = !!sale.dataCancelamento;
+      const isCanceled = (!!sale.dataCancelamento || sale.statusContrato === 'CANCELADO') && sale.retido !== 'Sim';
+      
+      if (sale.dataCancelamento && (!g.dataCancelamento || parseDateLocal(sale.dataCancelamento)! > parseDateLocal(g.dataCancelamento)!)) {
+        g.dataCancelamento = sale.dataCancelamento;
+      }
+
       if (isCanceled) {
          g.cotasCanceladas += 1;
-         if (sale.dataCancelamento && (!g.dataCancelamento || parseDateLocal(sale.dataCancelamento)! > parseDateLocal(g.dataCancelamento)!)) {
-           g.dataCancelamento = sale.dataCancelamento;
-         }
       } else {
          g.cotasRetidas += 1;
       }
@@ -214,7 +182,7 @@ export default function Atendimentos() {
 
     sales.forEach(s => {
       faturamento += (s.valor || 0);
-      const isCanceled = !!s.dataCancelamento;
+      const isCanceled = (!!s.dataCancelamento || s.statusContrato === 'CANCELADO') && s.retido !== 'Sim';
       if (isCanceled) {
           cotasCanceladas += 1;
       } else {
@@ -249,31 +217,85 @@ export default function Atendimentos() {
     );
   };
 
-  const handleUpdateManualField = async (id: string, field: string, value: any, currentSale: any) => {
+  const [editingRows, setEditingRows] = useState<Record<string, Partial<Sale>>>({});
+
+  const handleLocalChange = (id: string, field: string, value: any) => {
+    setEditingRows(prev => ({
+      ...prev,
+      [id]: {
+        ...(prev[id] || {}),
+        [field]: value
+      }
+    }));
+  };
+
+  const handleDateChange = (id: string, dateVal: string) => {
+    let brDate = '';
+    if (dateVal) {
+      const parts = dateVal.split('-');
+      if (parts.length === 3) brDate = `${parts[2]}/${parts[1]}/${parts[0]}`;
+    }
+    handleLocalChange(id, 'dataCancelamento', brDate);
+  };
+
+  const handleSaveRow = async (id: string, currentSale: Sale) => {
+    const updates = editingRows[id];
+    if (!updates || Object.keys(updates).length === 0) return;
+
     try {
       const dbRef = doc(db, 'sales', id);
-      let updates: any = { [field]: value };
+      const finalUpdates: any = { ...updates };
       
-      // Compute cotasRetidas automatically
-      if (field === 'cotasCanceladas') {
-         updates.cotasRetidas = Math.max(0, (currentSale.quantVenda || 0) - value);
-      }
-      
-      await updateDoc(dbRef, updates);
-      
-      setRawSales(prev => prev.map(s => {
-        if (s.id === id) {
-          const newS = { ...s, ...updates };
-          return newS;
+      if ('retido' in updates) {
+        if (updates.retido === 'Sim') {
+          finalUpdates.dataRetencao = Date.now();
+          finalUpdates.usuarioRetencaoId = currentUser?.uid || '';
+          finalUpdates.usuarioRetencaoNome = currentUser?.email || 'Usuário Desconhecido';
+          finalUpdates.valorDevolvido = 0; // Clear opposing field
+        } else if (updates.retido === 'Não') {
+          finalUpdates.dataRetencao = Date.now();
+          finalUpdates.usuarioRetencaoId = currentUser?.uid || '';
+          finalUpdates.usuarioRetencaoNome = currentUser?.email || 'Usuário Desconhecido';
+          finalUpdates.valorRetido = 0; // Clear opposing field
+        } else if (updates.retido === '') {
+          finalUpdates.dataRetencao = null;
+          finalUpdates.usuarioRetencaoId = null;
+          finalUpdates.usuarioRetencaoNome = null;
+          finalUpdates.valorRetido = 0;
+          finalUpdates.valorDevolvido = 0;
         }
-        return s;
-      }));
+      }
+
+      if ('formaPagamentoEntrada' in updates && updates.formaPagamentoEntrada === '') {
+        finalUpdates.valorEntradaEfetiva = null;
+        finalUpdates.parcelasEntrada = null;
+      }
+
+      await updateDoc(dbRef, finalUpdates);
+
+      mutate(prev => {
+        if (!prev) return [];
+        return prev.map(s => {
+          if (s.id === id) {
+            return { ...s, ...finalUpdates };
+          }
+          return s;
+        });
+      }, { revalidate: false });
+
+      setEditingRows(prev => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+
     } catch (e: any) {
       alert("Erro ao salvar: " + e.message);
     }
   };
 
-  const canEdit = userRole === 'admin' || userRole === 'analyst';
+  const canEdit = userRole === 'admin' || userPermissions.includes('edit_atendimentos');
+  const canOverride = userRole === 'admin' || userPermissions.includes('override_atendimentos');
 
   // Utils for Date input conversion: DB uses DD/MM/YYYY, input type="date" uses YYYY-MM-DD
   const formatForInput = (brDate?: string) => {
@@ -283,17 +305,12 @@ export default function Atendimentos() {
     return brDate;
   };
 
-  const handleDateChange = (id: string, dateVal: string, sale: any) => {
-    let brDate = '';
-    if (dateVal) {
-      const parts = dateVal.split('-');
-      if (parts.length === 3) brDate = `${parts[2]}/${parts[1]}/${parts[0]}`;
-    }
-    handleUpdateManualField(id, 'dataCancelamento', brDate, sale);
-  };
+  if (loading && rawSales.length === 0) {
+    return <SkeletonTable />;
+  }
 
   return (
-    <div className="flex-1 flex flex-col p-5 gap-5 overflow-hidden font-sans">
+    <div className={`flex-1 flex flex-col p-5 gap-5 overflow-hidden font-sans transition-opacity duration-300 ${loading ? 'opacity-60 pointer-events-none' : 'opacity-100'}`}>
       
       {/* Filter Bar */}
       <div className="flex items-center justify-between bg-white p-4 border border-slate-200 rounded-lg shrink-0 shadow-sm flex-wrap gap-4">
@@ -423,41 +440,169 @@ export default function Atendimentos() {
                          <td className="font-bold text-center text-emerald-600">{g.cotasRetidas}</td>
                        </tr>
                        
-                       {isExpanded && g.contracts.map((s: any) => (
+                       {isExpanded && g.contracts.map((s: Sale) => {
+                         const isCanceledLine = (!!s.dataCancelamento || s.statusContrato === 'CANCELADO') && s.retido !== 'Sim';
+                         
+                         const isOwner = s.usuarioRetencaoId === currentUser?.uid;
+                         const isRecent = s.dataRetencao ? (Date.now() - s.dataRetencao < 1000 * 60 * 60 * 2) : true; // 2 horas para correção pelo próprio autor
+                         const isLockedForAnalyst = s.retido && !(isOwner && isRecent);
+                         const canEditRecord = canOverride ? true : (canEdit && !isLockedForAnalyst);
+
+                         return (
                          <tr key={s.id} className="bg-slate-50/50 text-sm border-b border-slate-100 last:border-b-2 last:border-slate-200">
-                           <td colSpan={3} className="pl-10">
-                              <div className="grid grid-cols-3 gap-2">
-                                <div className="flex flex-col">
-                                  <span className="font-semibold text-[10px] uppercase text-slate-400 tracking-wider">Empreendimento</span>
-                                  <span className="text-slate-600 font-medium truncate">{s.empreendimento || 'N/A'}</span>
+                           <td colSpan={3} className="pl-10 py-3">
+                              <div className="flex flex-col gap-4">
+                                <div className="flex flex-wrap gap-6 items-center">
+                                  <div className="flex flex-col">
+                                    <span className="font-semibold text-[10px] uppercase text-slate-400 tracking-wider">Empreendimento</span>
+                                    <span className="text-slate-600 font-medium truncate max-w-[150px]">{s.empreendimento || 'N/A'}</span>
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <span className="font-semibold text-[10px] uppercase text-slate-400 tracking-wider">Localizador</span>
+                                    <span className="text-slate-600 font-medium">{s.localizador}</span>
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <span className="font-semibold text-[10px] uppercase text-slate-400 tracking-wider">Valor (VGV)</span>
+                                    <span className="text-slate-600 font-medium">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(s.valor || 0)}</span>
+                                  </div>
+                                  
+                                  <div className="h-[30px] w-[1px] bg-slate-200 hidden md:block"></div>
+                                  
+                                  <div className="flex gap-4 p-2 bg-indigo-50/50 border border-indigo-100 rounded-md">
+                                    <div className="flex flex-col">
+                                      <span className="font-semibold text-[10px] uppercase text-indigo-500 tracking-wider">Forma Pgto 1ª Parc</span>
+                                      <select 
+                                        className="text-xs border rounded p-1 bg-white cursor-pointer focus:ring-indigo-500 min-w-[100px]"
+                                        disabled={!canEditRecord}
+                                        value={editingRows[s.id!]?.formaPagamentoEntrada !== undefined ? editingRows[s.id!]?.formaPagamentoEntrada : (s.formaPagamentoEntrada || '')}
+                                        onChange={(e) => handleLocalChange(s.id!, 'formaPagamentoEntrada', e.target.value)}
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        <option value="">Não Inf.</option>
+                                        <option value="Crédito">Crédito</option>
+                                        <option value="Débito">Débito</option>
+                                        <option value="PIX">PIX</option>
+                                        <option value="Dinheiro">Dinheiro</option>
+                                      </select>
+                                    </div>
+
+                                    {(editingRows[s.id!]?.formaPagamentoEntrada !== undefined ? editingRows[s.id!]?.formaPagamentoEntrada : s.formaPagamentoEntrada) && (
+                                      <>
+                                        <div className="flex flex-col">
+                                          <span className="font-semibold text-[10px] uppercase text-indigo-500 tracking-wider">Entrada Efetiva (R$)</span>
+                                          <input 
+                                            type="number"
+                                            className="text-xs border rounded p-1 bg-white focus:ring-indigo-500 w-[100px]"
+                                            disabled={!canEditRecord}
+                                            value={editingRows[s.id!]?.valorEntradaEfetiva !== undefined ? editingRows[s.id!]?.valorEntradaEfetiva : (s.valorEntradaEfetiva || '')}
+                                            placeholder="Ex: 5000"
+                                            onChange={(e) => handleLocalChange(s.id!, 'valorEntradaEfetiva', parseFloat(e.target.value) || undefined)}
+                                            onClick={(e) => e.stopPropagation()}
+                                          />
+                                        </div>
+                                        <div className="flex flex-col">
+                                          <span className="font-semibold text-[10px] uppercase text-indigo-500 tracking-wider">Parcelas</span>
+                                          <select 
+                                            className="text-xs border rounded p-1 bg-white cursor-pointer focus:ring-indigo-500 min-w-[70px]"
+                                            disabled={!canEditRecord}
+                                            value={editingRows[s.id!]?.parcelasEntrada !== undefined ? editingRows[s.id!]?.parcelasEntrada : (s.parcelasEntrada || '')}
+                                            onChange={(e) => handleLocalChange(s.id!, 'parcelasEntrada', parseInt(e.target.value) || undefined)}
+                                            onClick={(e) => e.stopPropagation()}
+                                          >
+                                            <option value="">--</option>
+                                            {[...Array(12)].map((_, i) => (
+                                              <option key={i+1} value={i+1}>{i+1}x</option>
+                                            ))}
+                                          </select>
+                                        </div>
+                                      </>
+                                    )}
+                                  </div>
                                 </div>
-                                <div className="flex flex-col">
-                                  <span className="font-semibold text-[10px] uppercase text-slate-400 tracking-wider">Localizador</span>
-                                  <span className="text-slate-600 font-medium">{s.localizador}</span>
-                                </div>
-                                <div className="flex flex-col">
-                                  <span className="font-semibold text-[10px] uppercase text-slate-400 tracking-wider">Valor (VGV)</span>
-                                  <span className="text-slate-600 font-medium">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(s.valor || 0)}</span>
+
+                                <div className="flex flex-wrap gap-5 items-end p-2 bg-slate-100/50 rounded-md">
+                                  <div className="flex flex-col">
+                                    <span className="font-semibold text-[10px] uppercase text-slate-400 tracking-wider">Houve Retenção?</span>
+                                    {s.dataCancelamento || editingRows[s.id!]?.dataCancelamento || s.statusContrato === 'CANCELADO' ? (
+                                      <select 
+                                        className="text-xs border rounded p-1 bg-white cursor-pointer focus:ring-sky-500 max-w-[120px]"
+                                        disabled={!canEditRecord}
+                                        value={editingRows[s.id!]?.retido !== undefined ? editingRows[s.id!]?.retido : (s.retido || '')}
+                                        onChange={(e) => handleLocalChange(s.id!, 'retido', e.target.value)}
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        <option value="">Selecione...</option>
+                                        <option value="Sim">Sim</option>
+                                        <option value="Não">Não</option>
+                                      </select>
+                                    ) : (
+                                      <span className="text-slate-400 text-[11px] italic mt-1">N/A (Sem Solicitação)</span>
+                                    )}
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <span className="font-semibold text-[10px] uppercase text-slate-400 tracking-wider text-nowrap">
+                                      {(editingRows[s.id!]?.retido ?? s.retido) === 'Sim' ? 'Valor Retido (R$)' : (editingRows[s.id!]?.retido ?? s.retido) === 'Não' ? 'Valor Devolvido (R$)' : 'Valor Alvo'}
+                                    </span>
+                                    {(editingRows[s.id!]?.retido ?? s.retido) === 'Sim' ? (
+                                      <input 
+                                        type="number"
+                                        className="text-xs border rounded p-1 bg-white focus:ring-sky-500 max-w-[120px]"
+                                        disabled={!canEditRecord}
+                                        value={editingRows[s.id!]?.valorRetido !== undefined ? editingRows[s.id!]?.valorRetido : (s.valorRetido || '')}
+                                        placeholder="Ex: 5000"
+                                        onChange={(e) => handleLocalChange(s.id!, 'valorRetido', parseFloat(e.target.value) || undefined)}
+                                        onClick={(e) => e.stopPropagation()}
+                                      />
+                                    ) : (editingRows[s.id!]?.retido ?? s.retido) === 'Não' ? (
+                                      <input 
+                                        type="number"
+                                        className="text-xs border rounded p-1 bg-white focus:ring-sky-500 max-w-[120px]"
+                                        disabled={!canEditRecord}
+                                        value={editingRows[s.id!]?.valorDevolvido !== undefined ? editingRows[s.id!]?.valorDevolvido : (s.valorDevolvido || '')}
+                                        placeholder="Ex: 15000"
+                                        onChange={(e) => handleLocalChange(s.id!, 'valorDevolvido', parseFloat(e.target.value) || undefined)}
+                                        onClick={(e) => e.stopPropagation()}
+                                      />
+                                    ) : (
+                                      <span className="text-slate-400 text-[11px] italic mt-1">-</span>
+                                    )}
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <span className="font-semibold text-[10px] uppercase text-slate-400 tracking-wider">Analista</span>
+                                    <span className="text-slate-600 font-medium text-[11px] mt-1">{(s.retido === 'Sim' || s.retido === 'Não') ? s.usuarioRetencaoNome?.split('@')[0] || 'Registrado' : '-'}</span>
+                                  </div>
                                 </div>
                               </div>
+                              {editingRows[s.id!] && Object.keys(editingRows[s.id!] || {}).length > 0 && (
+                                <div className="mt-3 w-full flex justify-end">
+                                  <button 
+                                    onClick={(e) => { e.stopPropagation(); handleSaveRow(s.id!, s); }}
+                                    className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-[11px] font-bold shadow flex items-center gap-1 transition-colors"
+                                  >
+                                    <Save size={14}/> Salvar Lançamento
+                                  </button>
+                                </div>
+                              )}
                            </td>
                            <td className="font-semibold text-center text-slate-500">1</td>
                            <td>
-                             <input 
-                               type="date" 
-                               className="input-field w-32 text-xs cursor-pointer bg-white"
-                               disabled={!canEdit}
-                               min={formatForInput(s.dataAtendimento)}
-                               max={maxDateAllowed}
-                               value={formatForInput(s.dataCancelamento)}
-                               onChange={(e) => handleDateChange(s.id, e.target.value, s)}
-                               onClick={(e) => e.stopPropagation()}
-                             />
+                             <div className="flex flex-col">
+                               <input 
+                                 type="date" 
+                                 className="input-field w-full max-w-[130px] text-xs cursor-pointer bg-white"
+                                 disabled={!canEditRecord}
+                                 min={formatForInput(s.dataAtendimento)}
+                                 max={maxDateAllowed}
+                                 value={formatForInput(editingRows[s.id!]?.dataCancelamento !== undefined ? editingRows[s.id!]?.dataCancelamento : s.dataCancelamento)}
+                                 onChange={(e) => handleDateChange(s.id!, e.target.value)}
+                                 onClick={(e) => e.stopPropagation()}
+                               />
+                             </div>
                            </td>
-                           <td className="font-semibold text-center text-red-500">{s.dataCancelamento || s.statusContrato === 'CANCELADO' ? 1 : 0}</td>
-                           <td className="font-semibold text-emerald-600 text-center">{s.dataCancelamento || s.statusContrato === 'CANCELADO' ? 0 : 1}</td>
+                           <td className="font-semibold text-center text-red-500">{isCanceledLine ? 1 : 0}</td>
+                           <td className="font-semibold text-emerald-600 text-center">{isCanceledLine ? 0 : 1}</td>
                          </tr>
-                       ))}
+                       )})}
                      </Fragment>
                    );
                 })

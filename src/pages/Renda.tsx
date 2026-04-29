@@ -1,9 +1,12 @@
 import { useState, useEffect, useMemo } from 'react';
-import { collection, query, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { parseDateLocal } from '../lib/utils';
 import { Wallet, XCircle } from 'lucide-react';
 import { differenceInDays } from 'date-fns';
+import { Sale } from '../types';
+import { useSalesData } from '../hooks/useSalesData';
+
+import { SkeletonTable } from '../components/ui/SkeletonTable';
 
 const EMPREENDIMENTO_DICT: Record<string, string> = {
   "ALTOS DA BORGES": "ALTOS DA BORGES",
@@ -40,46 +43,54 @@ const faixasRenda = [
   { label: 'Entre R$ 11.000 e R$ 15.999', min: 11000, max: 15999.99, order: 4 },
   { label: 'Entre R$ 16.000 e R$ 20.999', min: 16000, max: 20999.99, order: 5 },
   { label: 'Entre R$ 21.000 e R$ 29.999', min: 21000, max: 29999.99, order: 6 },
-  { label: 'Acima de R$ 30.000', min: 30000, max: Infinity, order: 7 }
+  { label: 'Acima de R$ 30.000', min: 30000, max: Infinity, order: 7 },
+  { label: 'Não Informada', min: -1, max: -1, order: 8 }
 ];
 
 function getFaixaRenda(rendaValue: any): { label: string, order: number } {
-  let num = 0;
+  if (rendaValue === null || rendaValue === undefined || String(rendaValue).trim() === '') {
+      return { label: 'Não Informada', order: 8 };
+  }
   
-  if (rendaValue !== null && rendaValue !== undefined && rendaValue !== '') {
-    let str = String(rendaValue).trim();
-    // Remove R$ and spaces
-    str = str.replace(/[R$\s]/g, '');
-    
-    // Handle Brazilian format with comma as decimal and dot as thousand separator
-    if (str.includes(',') && str.includes('.')) {
-        str = str.replace(/\./g, '').replace(',', '.');
-    } else if (str.includes(',')) {
-        str = str.replace(',', '.');
-    } else if (str.includes('.') && str.indexOf('.') !== str.length - 3) {
-        // Handle thousands separator using dot (e.g., 14.000)
-        str = str.replace(/\./g, '');
-    }
-    
-    const parsed = parseFloat(str);
-    if (!isNaN(parsed)) {
-       num = parsed;
-    }
+  let str = String(rendaValue).trim();
+  // Remove R$ and all spaces
+  str = str.replace(/[R$\s]/gi, '');
+  
+  if (str.includes(',') && str.includes('.')) {
+      str = str.replace(/\./g, '').replace(',', '.');
+  } else if (str.includes(',')) {
+      str = str.replace(',', '.');
+  } else if (str.includes('.')) {
+      // If there's a dot, check if it's a decimal separator like "1200.50"
+      const parts = str.split('.');
+      const lastPart = parts[parts.length - 1];
+      if (lastPart.length === 2 || lastPart.length === 1) {
+          // If it ends exactly with 1 or 2 digits after the last dot, assume decimal (eg: 15.5 or 15.50)
+          if (parts.length > 2) {
+             // multiple dots like 1.500.20 -> invalid or weird, just strip first ones
+             str = parts.slice(0, -1).join('') + '.' + lastPart;
+          }
+      } else {
+          // It's likely a thousands separator, e.g. "14.000"
+          str = str.replace(/\./g, '');
+      }
+  }
+  
+  const parsed = parseFloat(str);
+  if (isNaN(parsed) || parsed < 0) {
+      return { label: 'Não Informada', order: 8 };
   }
 
   for (const faixa of faixasRenda) {
-      if (faixa.min >= 0 && num >= faixa.min && num <= faixa.max) {
+      if (parsed >= faixa.min && parsed <= faixa.max && faixa.label !== 'Não Informada') {
           return { label: faixa.label, order: faixa.order };
       }
   }
 
-  return { label: 'Entre R$ 0 e R$ 4.999', order: 1 };
+  return { label: 'Não Informada', order: 8 };
 }
 
 export default function Renda() {
-  const [rawSales, setRawSales] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-
   // Date filtering state
   const [monthSelection, setMonthSelection] = useState(() => {
     const d = new Date();
@@ -89,6 +100,8 @@ export default function Renda() {
   const [endDate, setEndDate] = useState('');
   const [cancelFilter, setCancelFilter] = useState<'all' | '7' | '30' | '31+'>('all');
   const [empreendimentoFilter, setEmpreendimentoFilter] = useState('all');
+
+  const { rawSales, loading } = useSalesData(startDate, endDate);
 
   useEffect(() => {
     if (monthSelection) {
@@ -100,27 +113,6 @@ export default function Renda() {
       setEndDate(lastDay);
     }
   }, [monthSelection]);
-
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      const q = query(collection(db, 'sales'));
-      const querySnapshot = await getDocs(q);
-      const data: any[] = [];
-      querySnapshot.forEach((doc) => {
-        data.push({ id: doc.id, ...doc.data() });
-      });
-      setRawSales(data);
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleStartDateChange = (val: string) => {
     setStartDate(val);
@@ -197,7 +189,7 @@ export default function Renda() {
 
     // Convert map to array and sort by Order
     return Object.values(map).sort((a, b) => a.order - b.order);
-  }, [rawSales, startDate, endDate, cancelFilter]);
+  }, [rawSales, startDate, endDate, cancelFilter, empreendimentoFilter]);
 
   const totaisGerais = useMemo(() => {
     return groupedData.reduce(
@@ -212,8 +204,12 @@ export default function Renda() {
 
   const taxaGlobalCanc = totaisGerais.brutas > 0 ? ((totaisGerais.cancelamentos / totaisGerais.brutas) * 100).toFixed(1) : '0.0';
 
+  if (loading && rawSales.length === 0) {
+    return <SkeletonTable />;
+  }
+
   return (
-    <div className="flex-1 flex flex-col p-5 gap-5 overflow-y-auto font-sans h-full bg-slate-50">
+    <div className={`flex-1 flex flex-col p-5 gap-5 overflow-y-auto font-sans h-full bg-slate-50 transition-opacity duration-300 ${loading ? 'opacity-60 pointer-events-none' : 'opacity-100'}`}>
       {/* Top Filter Bar */}
       <div className="flex items-center justify-between bg-white p-4 border border-slate-200 rounded-lg shrink-0 flex-wrap gap-4 shadow-sm">
         <div className="flex gap-6 items-center flex-wrap">

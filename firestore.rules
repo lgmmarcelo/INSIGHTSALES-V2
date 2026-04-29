@@ -94,18 +94,10 @@ service cloud.firestore {
         allow get: if isValidId(saleId) && isRegisteredUser();
 
         // Create: Admin or Analyst can insert Excel data
-        allow create: if isValidId(saleId) && isValidSale(incoming()) && (isAdmin() || isAnalyst());
+          allow create: if isValidId(saleId) && isValidSale(incoming()) && isAdmin();
 
-        // Update: 
-        // Analyst: ONLY can update cancellation manual fields.
-        // Admin: Can update manual fields, maybe fix other fields if needed.
-        allow update: if isValidId(saleId) && isValidSale(incoming()) && isRegisteredUser() && (
-            isAdmin() || 
-            (
-                isAnalyst() && 
-                incoming().diff(existing()).affectedKeys().hasOnly(['dataCancelamento', 'cotasCanceladas', 'cotasRetidas'])
-            )
-        );
+        // Update: Admin and Analyst
+        allow update: if isValidId(saleId) && isValidSale(incoming()) && (isAdmin() || isAnalyst());
 
         // Delete: Only Admin
         allow delete: if isValidId(saleId) && isAdmin();

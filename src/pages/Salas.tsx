@@ -4,6 +4,7 @@ import { db } from '../lib/firebase';
 import { parseDateLocal } from '../lib/utils';
 import { Building2, XCircle, Store } from 'lucide-react';
 import { differenceInDays } from 'date-fns';
+import { Sale } from '../types';
 
 const EMPREENDIMENTO_MAP: Record<string, string> = {
   "ALTOS DA BORGES": "ALTOS DA BORGES",
@@ -34,7 +35,7 @@ interface SalaStats {
 }
 
 export default function Salas() {
-  const [rawSales, setRawSales] = useState<any[]>([]);
+  const [rawSales, setRawSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Date filtering state
@@ -66,9 +67,9 @@ export default function Salas() {
     try {
       const q = query(collection(db, 'sales'));
       const querySnapshot = await getDocs(q);
-      const data: any[] = [];
+      const data: Sale[] = [];
       querySnapshot.forEach((doc) => {
-        data.push({ id: doc.id, ...doc.data() });
+        data.push({ id: doc.id, ...doc.data() } as Sale);
       });
       setRawSales(data);
     } catch (error) {

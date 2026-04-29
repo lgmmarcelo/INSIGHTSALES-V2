@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
-import { collection, query, getDocs, limit, where } from 'firebase/firestore';
-import { db } from '../lib/firebase';
 import { differenceInDays, parseDateLocal } from '../lib/utils';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LabelList, Cell } from 'recharts';
+import { Sale } from '../types';
+import { useSalesData } from '../hooks/useSalesData';
+import { SkeletonDashboard } from '../components/ui/SkeletonDashboard';
 
 const EMPREENDIMENTO_DICT: Record<string, string> = {
   "ALTOS DA BORGES": "ALTOS DA BORGES",
@@ -26,9 +27,6 @@ const normalizeEmpreendimento = (raw: string) => {
 };
 
 export default function Dashboard() {
-  const [rawSales, setRawSales] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-
   // Date filtering state
   const [monthSelection, setMonthSelection] = useState(() => {
     const d = new Date();
@@ -37,6 +35,8 @@ export default function Dashboard() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [empreendimentoFilter, setEmpreendimentoFilter] = useState('all');
+
+  const { rawSales, loading } = useSalesData(startDate, endDate);
 
   useEffect(() => {
     if (monthSelection) {
@@ -57,28 +57,6 @@ export default function Dashboard() {
   const handleEndDateChange = (val: string) => {
     setEndDate(val);
     setMonthSelection(''); // clear month shortcut if manual edit
-  };
-
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      const q = query(collection(db, 'sales'));
-      const querySnapshot = await getDocs(q);
-      const data: any[] = [];
-      querySnapshot.forEach((doc) => {
-        data.push({ id: doc.id, ...doc.data() });
-      });
-      // Filter is handled by upload phase - all incoming data is valid contracts
-      setRawSales(data);
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setLoading(false);
-    }
   };
 
   const availableEmpreendimentos = useMemo(() => {
@@ -235,8 +213,12 @@ export default function Dashboard() {
     });
   })();
 
+  if (loading && rawSales.length === 0) {
+    return <SkeletonDashboard />;
+  }
+
   return (
-    <div className="flex-1 flex flex-col p-5 gap-5 overflow-y-auto font-sans">
+    <div className={`flex-1 flex flex-col p-5 gap-5 overflow-y-auto font-sans transition-opacity duration-300 ${loading ? 'opacity-60 pointer-events-none' : 'opacity-100'}`}>
       {/* Filter Bar */}
       <div className="flex items-center justify-between bg-white p-4 border border-slate-200 rounded-lg shrink-0 shadow-sm flex-wrap gap-4">
         

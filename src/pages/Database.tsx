@@ -1,10 +1,19 @@
 import { useState, useEffect } from 'react';
-import { collection, getDocs, doc, setDoc, writeBatch } from 'firebase/firestore';
+import { collection, getDocs, getCountFromServer, doc, setDoc, writeBatch } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { DownloadCloud, ShieldCheck, Database as DbIcon, Info, Upload, CheckCircle, Trash2, Link } from 'lucide-react';
 import * as xlsx from 'xlsx';
+import { Sale } from '../types';
+import { useAuth } from '../context/AuthContext';
 
 export default function DatabaseManagement() {
+  const { userRole, userPermissions } = useAuth();
+  
+  const canUpload = userRole === 'admin' || userPermissions.includes('db_upload');
+  const canExport = userRole === 'admin' || userPermissions.includes('db_export');
+  const canRestore = userRole === 'admin' || userPermissions.includes('db_restore');
+  const canDelete = userRole === 'admin' || userPermissions.includes('db_delete');
+
   const [loadingBackup, setLoadingBackup] = useState(false);
   const [loadingUpload, setLoadingUpload] = useState(false);
   const [uploadStatusText, setUploadStatusText] = useState('');
@@ -22,21 +31,37 @@ export default function DatabaseManagement() {
   const [confirmText, setConfirmText] = useState('');
 
   useEffect(() => {
-    getDocs(collection(db, 'sales')).then(snap => setRecordCount(snap.size)).catch(() => {});
+    getCountFromServer(collection(db, 'sales')).then(snap => setRecordCount(snap.data().count)).catch(() => {});
   }, []);
 
+  const [backupStartDate, setBackupStartDate] = useState('');
+  const [backupEndDate, setBackupEndDate] = useState('');
+
   const handleBackup = async () => {
-    // ... logic remains standard
     setLoadingBackup(true);
     try {
       const querySnapshot = await getDocs(collection(db, 'sales'));
       const data: any[] = [];
       querySnapshot.forEach((doc) => {
-        data.push(doc.data());
+        const d = doc.data();
+        let add = true;
+        
+        let isoCompare = d.dataAtendimentoIso;
+        if (!isoCompare && d.dataAtendimento) {
+            const parts = d.dataAtendimento.split('/');
+            if (parts.length === 3) isoCompare = `${parts[2]}-${parts[1]}-${parts[0]}`;
+        }
+        
+        if (backupStartDate && isoCompare && isoCompare < backupStartDate) add = false;
+        if (backupEndDate && isoCompare && isoCompare > backupEndDate) add = false;
+        
+        if (add) {
+           data.push({ ...d, id: doc.id });
+        }
       });
 
       if (data.length === 0) {
-        alert("O banco de dados está vazio.");
+        alert("O banco de dados está vazio ou não há registros no período selecionado.");
         return;
       }
 
@@ -47,7 +72,12 @@ export default function DatabaseManagement() {
       const today = new Date();
       const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
       
-      xlsx.writeFile(wb, `Backup_InsightSales_${dateStr}.xlsx`);
+      let fileName = `Backup_InsightSales_${dateStr}.xlsx`;
+      if (backupStartDate || backupEndDate) {
+          fileName = `Backup_InsightSales_${backupStartDate || 'Inicio'}_ate_${backupEndDate || 'Fim'}.xlsx`;
+      }
+
+      xlsx.writeFile(wb, fileName);
     } catch (e: any) {
       alert("Erro ao gerar backup: " + e.message);
     } finally {
@@ -102,7 +132,7 @@ export default function DatabaseManagement() {
        
        alert(`Sucesso! ${docsToDelete.length} registros permanentemente apagados do sistema.`);
        
-       getDocs(collection(db, 'sales')).then(snap => setRecordCount(snap.size)).catch(() => {});
+       getCountFromServer(collection(db, 'sales')).then(snap => setRecordCount(snap.data().count)).catch(() => {});
        setSuccessMsg('Registros apagados.');
        setShowConfirmDelete(false);
        setConfirmText('');
@@ -144,6 +174,74 @@ export default function DatabaseManagement() {
       reader.readAsBinaryString(file);
   });
 
+  const readExcelDict = (file: File) => new Promise<any[]>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+         try {
+             const wb = xlsx.read(e.target?.result, { type: 'binary' });
+             const ws = wb.Sheets[wb.SheetNames[0]];
+             const data = xlsx.utils.sheet_to_json(ws);
+             resolve(data);
+         } catch (err) {
+             reject(err);
+         }
+      };
+      reader.onerror = reject;
+      reader.readAsBinaryString(file);
+  });
+
+  const [fileRestore, setFileRestore] = useState<File | null>(null);
+
+  const handleRestoreBackup = async () => {
+    if (!fileRestore) return;
+    setLoadingUpload(true);
+    setUploadStatusText('Lendo arquivo de Restauração...');
+    setSuccessMsg('');
+    try {
+        const data = await readExcelDict(fileRestore);
+        if (data.length === 0) {
+            throw new Error('A planilha de backup está vazia.');
+        }
+
+        setUploadStatusText(`Restaurando ${data.length} registros...`);
+        let restoredCount = 0;
+        let batchCount = 0;
+        let currentBatch = writeBatch(db);
+
+        for (const row of data) {
+            const rowId = row.id;
+            if (!rowId) continue; // Precisa do ID exato para restaurar
+
+            // Remove o ID do corpo do dado para ficar igual era salvo
+            const docData = { ...row };
+            delete docData.id;
+
+            currentBatch.set(doc(db, 'sales', rowId), docData); // Sobrescreve (ou recria) o documento com os dados do backup
+            restoredCount++;
+            batchCount++;
+
+            if (batchCount >= 400) {
+                await currentBatch.commit();
+                currentBatch = writeBatch(db);
+                batchCount = 0;
+            }
+        }
+
+        if (batchCount > 0) {
+            await currentBatch.commit();
+        }
+
+        getCountFromServer(collection(db, 'sales')).then(snap => setRecordCount(snap.data().count)).catch(() => {});
+        setSuccessMsg(`Sucesso: ${restoredCount} registros foram restaurados a partir do backup.`);
+        setFileRestore(null);
+    } catch(err: any) {
+        alert("Erro ao restaurar backup: " + err.message);
+    } finally {
+        setUploadStatusText('');
+        setLoadingUpload(false);
+    }
+  };
+
   const handleCrossUpload = async () => {
     if (!fileContratos || !fileAtendimentos) {
        alert("Selecione ambas as planilhas antes de importar.");
@@ -166,6 +264,14 @@ export default function DatabaseManagement() {
       await new Promise(r => setTimeout(r, 50));
       const dataAtend = await readExcel(fileAtendimentos);
 
+      // Validação das Planilhas
+      const isContratosValid = dataContratos.some((row, idx) => idx < 10 && String(row['Y'] || '').toUpperCase().includes('STATUS'));
+      const isAtendimentosValid = dataAtend.some((row, idx) => idx < 10 && String(row['BA'] || '').toUpperCase().includes('LOCALIZA'));
+
+      if (!isContratosValid || !isAtendimentosValid) {
+          throw new Error('As planilhas carregadas não são as matrizes aceitas pelo sistema. Verifique se você subiu "CONTRATOS" no Passo 1 (com a coluna Y de Status) e "ATENDIMENTOS" no Passo 2 (com a coluna BA de Localizador).');
+      }
+
       setUploadStatusText('Consolidando e salvando na nuvem (isso pode demorar varios segundos)...');
       await new Promise(r => setTimeout(r, 50));
 
@@ -177,17 +283,28 @@ export default function DatabaseManagement() {
       for (const row of dataAtend) {
           const locVenda = String(row['BA'] || '').trim();
           if (locVenda && !locVenda.toUpperCase().includes('LOCALIZADOR')) {
-             atendMapByLoc[locVenda] = row;
+             // Separa os localizadores por vírgula, barra ou ponto-e-vírgula para cadastrar cada cota individualmente
+             const locs = locVenda.split(/[,/;\s]+/).map(l => l.trim().replace(/\D/g, '')).filter(l => l.length > 1);
+             for (const l of locs) {
+                 atendMapByLoc[l] = row;
+             }
           }
           
-          const cpfRaw = String(row['G'] || '').replace(/\D/g, '');
-          if (cpfRaw && cpfRaw.length >= 5) {
-             atendMapByCpf[cpfRaw] = row;
+          const cpfRaw = String(row['G'] || '').trim();
+          if (cpfRaw) {
+             const cpfs = cpfRaw.split(/[^0-9]+/).filter(c => c.length >= 5);
+             for (const c of cpfs) {
+                atendMapByCpf[c] = row;
+             }
           }
 
           const nameRaw = String(row['F'] || '').trim().toUpperCase();
-          if (nameRaw && nameRaw.length > 5) {
-             atendMapByName[nameRaw] = row;
+          if (nameRaw) {
+             // Desmembra os clientes divididos por "/" (barra) para garantir o link do cônjuge
+             const names = nameRaw.split('/').map(n => n.trim()).filter(n => n.length > 5);
+             for (const n of names) {
+                 atendMapByName[n] = row;
+             }
           }
       }
 
@@ -211,8 +328,8 @@ export default function DatabaseManagement() {
               continue;
           }
 
-          // O Código (Coluna E) é a chave primária única da cota. O Localizador geralmente é do Atendimento.
-          const localizador = String(cRow['A'] || '').trim();
+          const localizadorOriginal = String(cRow['A'] || '').trim();
+          const localizador = localizadorOriginal.replace(/\D/g, '');
           const codigo = String(cRow['E'] || '').trim();
           
           let baseDocId = codigo || (localizador ? `${localizador}-S/Cod` : `cota-SemCod`);
@@ -226,17 +343,19 @@ export default function DatabaseManagement() {
           const docId = occurrence > 1 ? `${baseDocId}-${occurrence}` : baseDocId;
 
           const cpf1 = String(cRow['H'] || '').replace(/\D/g, '');
-          const cpf2 = String(cRow['J'] || '').replace(/\D/g, '');
+          const cpf2 = String(cRow['K'] || '').replace(/\D/g, '');
 
-          // Multiproduto: Procura pelo Localizador. Se falhar (comprou + de 1 cota mas o atendimento só registrou 1 localizador), 
-          // nós casamos pelo CPF do Cliente 1 ou Cliente 2.
-          let aRow = atendMapByLoc[localizador];
-          if (!aRow && cpf1) aRow = atendMapByCpf[cpf1];
-          if (!aRow && cpf2) aRow = atendMapByCpf[cpf2];
-
-          // Se Cessionário 1 existe mas tá sem CPF, tentar casar pelo NOME do Cessionario 1
           const cessionarioNomeContratos = String(cRow['G'] || '').trim().toUpperCase();
-          if (!aRow && cessionarioNomeContratos) {
+
+          // Conexão (Mudança Estrutural Autorizada): Localizador como principal (precisão da transação), fallback no CPF
+          let aRow = null;
+          if (localizador && atendMapByLoc[localizador]) {
+             aRow = atendMapByLoc[localizador];
+          } else if (cpf1 && atendMapByCpf[cpf1]) {
+             aRow = atendMapByCpf[cpf1];
+          } else if (cpf2 && atendMapByCpf[cpf2]) {
+             aRow = atendMapByCpf[cpf2];
+          } else if (cessionarioNomeContratos && atendMapByName[cessionarioNomeContratos]) {
              aRow = atendMapByName[cessionarioNomeContratos];
           }
 
@@ -249,7 +368,23 @@ export default function DatabaseManagement() {
           let dataAtendimentoIso = "";
           if (dataAtendimento && dataAtendimento.includes('/')) {
               const p = dataAtendimento.split('/');
-              if(p.length === 3) dataAtendimentoIso = `${p[2]}-${p[1]}-${p[0]}`;
+              if(p.length === 3) {
+                  dataAtendimentoIso = `${p[2]}-${p[1]}-${p[0]}`;
+                  
+                  // Trava de 3 dias para perfis não admin
+                  if (userRole !== 'admin') {
+                      const rowDate = new Date(Number(p[2]), Number(p[1]) - 1, Number(p[0]), 0, 0, 0);
+                      const today = new Date();
+                      today.setHours(0, 0, 0, 0);
+                      
+                      const diffTime = today.getTime() - rowDate.getTime();
+                      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                      
+                      if (diffDays > 3) {
+                          throw new Error(`Acesso Restrito: Seu perfil de usuário não tem permissão para importar contratos com mais de 3 dias de retroatividade. (Data encontrada: ${dataAtendimento}). Contate um administrador.`);
+                      }
+                  }
+              }
           }
 
           // COlumn H is ALWAYS the master CPF. Column G in Contratos is Cessionario 1 Name.
@@ -266,8 +401,8 @@ export default function DatabaseManagement() {
               valorNum = parseFloat(rawValor.replace(/[^\d,-]/g, '').replace(',', '.')) || 0;
           }
 
-          const saleDoc = {
-            localizador,
+          const saleDoc: Sale = {
+            localizador: localizadorOriginal,
             codigo,
             cpf: cpfRaw,
             cliente: clienteNome,
@@ -289,17 +424,17 @@ export default function DatabaseManagement() {
             statusContrato: status,
 
             // Demographics from Atendimentos
-            idade1: String(aRow['O'] || ''),
-            idade2: String(aRow['P'] || ''),
-            profissao1: String(aRow['Q'] || ''),
-            profissao2: String(aRow['R'] || ''),
-            estadoCivil: String(aRow['W'] || ''),
-            renda: String(aRow['AB'] || ''),
-            cidade: String(aRow['AC'] || ''),
-            estado: String(aRow['AD'] || ''),
-            possuiVeiculo: String(aRow['AE'] || ''),
-            anoVeiculo: String(aRow['AF'] || ''),
-            possuiCasaPropria: String(aRow['AG'] || ''),
+            idade1: aRow['O'] != null ? String(aRow['O']) : '',
+            idade2: aRow['P'] != null ? String(aRow['P']) : '',
+            profissao1: aRow['Q'] != null ? String(aRow['Q']) : '',
+            profissao2: aRow['R'] != null ? String(aRow['R']) : '',
+            estadoCivil: aRow['W'] != null ? String(aRow['W']) : '',
+            renda: aRow['AB'] != null ? String(aRow['AB']) : '',
+            cidade: aRow['AC'] != null ? String(aRow['AC']) : '',
+            estado: aRow['AD'] != null ? String(aRow['AD']) : '',
+            possuiVeiculo: aRow['AE'] != null ? String(aRow['AE']) : '',
+            anoVeiculo: aRow['AF'] != null ? String(aRow['AF']) : '',
+            possuiCasaPropria: aRow['AG'] != null ? String(aRow['AG']) : '',
             
             uploadedAt: Date.now()
           };
@@ -320,7 +455,7 @@ export default function DatabaseManagement() {
       }
 
       setSuccessMsg(`Sucesso: ${processed} contratos foram atrelados aos seus atendimentos e importados. (${skippedConfig} ignorados).`);
-      getDocs(collection(db, 'sales')).then(snap => setRecordCount(snap.size)).catch(() => {});
+      getCountFromServer(collection(db, 'sales')).then(snap => setRecordCount(snap.data().count)).catch(() => {});
       setTimeout(() => setSuccessMsg(''), 8000);
 
     } catch (err: any) {
@@ -343,6 +478,7 @@ export default function DatabaseManagement() {
         <p className="text-slate-500 text-sm mt-1">Gerencie, preserve e faça o backup físico de toda a inteligência do sistema.</p>
       </div>
 
+      {canUpload && (
       <div className="bg-white p-6 border border-slate-200 rounded-lg shadow-sm">
         <h2 className="font-bold text-lg mb-4 flex items-center gap-2">
            <Link size={18} />
@@ -380,23 +516,47 @@ export default function DatabaseManagement() {
            {loadingUpload ? <span className="animate-pulse">{uploadStatusText || 'Carregando...'}</span> : <><Upload size={16}/> Cruzar e Importar Bases</>}
         </button>
       </div>
+      )}
 
-      <div className="grid grid-cols-2 gap-5">
+      {(canExport || canRestore) && (
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         {/* Backup Card */}
+        {canExport && (
         <div className="bg-white p-6 border border-slate-200 rounded-lg shadow-sm flex flex-col">
           <div className="flex items-center gap-3 mb-4 text-sky-700">
             <div className="bg-sky-100 p-3 rounded-full">
               <DownloadCloud size={24} />
             </div>
             <div>
-              <h2 className="font-bold text-lg leading-tight">Exportar Backup Completo</h2>
+              <h2 className="font-bold text-lg leading-tight">Exportar Backup</h2>
               <span className="text-xs font-semibold text-slate-500 uppercase tracking-widest">Rotina de Segurança</span>
             </div>
           </div>
           
           <p className="text-sm text-slate-600 mb-6 flex-1">
-            Gera uma planilha contendo a união <b>absoluta</b> de todos os dados do sistema. Esta planilha mescla tanto as informações brutas que vieram do sistema ERP (Excel original) quanto os inputs manuais salvos pelos analistas diretamente na plataforma (Prazos, Cotas e Cancelamentos).
+            Gera uma planilha contendo a união de todos os dados do sistema. Pode ser baixada de forma <b>absoluta</b> ou selecionando um período específico. Esta planilha garante que você possa restaurar o sistema em caso de crash.
           </p>
+
+          <div className="flex items-end gap-3 p-4 bg-slate-50 border border-slate-200 rounded-md mb-6">
+             <div className="flex flex-col flex-1">
+                <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 tracking-wider">A PARTIR DE (OPCIONAL)</label>
+                <input 
+                  type="date" 
+                  value={backupStartDate} 
+                  onChange={(e) => setBackupStartDate(e.target.value)}
+                  className="w-full text-xs font-semibold border-slate-300 rounded shadow-sm p-1.5 focus:ring-sky-500 focus:border-sky-500 text-slate-700"
+                />
+             </div>
+             <div className="flex flex-col flex-1">
+                <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 tracking-wider">ATÉ (OPCIONAL)</label>
+                <input 
+                  type="date" 
+                  value={backupEndDate} 
+                  onChange={(e) => setBackupEndDate(e.target.value)}
+                  className="w-full text-xs font-semibold border-slate-300 rounded shadow-sm p-1.5 focus:ring-sky-500 focus:border-sky-500 text-slate-700"
+                />
+             </div>
+          </div>
           
           <div className="flex items-center justify-between mt-auto">
             <span className="text-xs font-semibold text-slate-500 flex items-center gap-1">
@@ -407,12 +567,54 @@ export default function DatabaseManagement() {
               disabled={loadingBackup || loadingUpload || recordCount === 0}
               className="bg-sky-600 text-white font-bold py-2.5 px-6 rounded-md shadow-sm transition-colors hover:bg-sky-700 disabled:opacity-50 flex items-center gap-2"
             >
-              {loadingBackup ? 'Compilando...' : 'Baixar .XLSX agora'}
+              {loadingBackup ? 'Compilando...' : (backupStartDate || backupEndDate ? 'Baixar Período (.XLSX)' : 'Baixar Tudo (.XLSX)')}
             </button>
           </div>
         </div>
+        )}
 
-        {/* Info Card */}
+        {/* Restore Card */}
+        {canRestore && (
+        <div className="bg-amber-50 p-6 border border-amber-200 rounded-lg shadow-sm flex flex-col">
+          <div className="flex items-center gap-3 mb-4 text-amber-700">
+            <div className="bg-amber-100 p-3 rounded-full">
+              <Upload size={24} />
+            </div>
+            <div>
+              <h2 className="font-bold text-lg leading-tight">Restaurar do Backup</h2>
+              <span className="text-xs font-semibold text-amber-600/80 uppercase tracking-widest">Recuperação de Dados</span>
+            </div>
+          </div>
+          
+          <p className="text-sm text-amber-800/80 mb-6 flex-1">
+            Se houve um crash ou erro, selecione um arquivo de backup <b>InsightSales_xxxx.xlsx</b> previamente baixado para <b>recompor</b> os dados. A restauração irá sobrescrever ou recriar os registros correspondentes.
+          </p>
+          
+          <div className={`p-4 border border-dashed rounded-lg flex flex-col gap-2 transition-colors mb-6 ${fileRestore ? 'border-amber-400 bg-amber-100/50' : 'border-amber-300 bg-white'}`}>
+              <span className="font-semibold text-sm text-amber-900">Selecione o Arquivo de Backup (.xlsx)</span>
+              <input 
+                 type="file" accept=".xlsx, .xls"
+                 onChange={(e) => setFileRestore(e.target.files?.[0] || null)}
+                 className="text-xs cursor-pointer file:mr-4 file:rounded-md file:border-0 file:bg-amber-200 file:text-amber-800 file:px-4 file:py-2 file:text-xs file:font-bold hover:file:bg-amber-300"
+              />
+          </div>
+
+          <div className="flex items-center justify-end mt-auto">
+            <button 
+              onClick={handleRestoreBackup}
+              disabled={loadingBackup || loadingUpload || !fileRestore}
+              className="bg-amber-600 outline-none text-white font-bold py-2.5 px-6 rounded-md shadow-sm transition-colors hover:bg-amber-700 disabled:opacity-50 flex items-center gap-2"
+            >
+              <Upload size={16}/> Compor Banco de Dados
+            </button>
+          </div>
+        </div>
+        )}
+      </div>
+      )}
+
+      {/* Info Card */}
+      {canUpload && (
         <div className="bg-emerald-50 p-6 border border-emerald-100 rounded-lg shadow-sm flex flex-col">
           <div className="flex items-center gap-3 mb-4 text-emerald-800">
             <div className="bg-emerald-100 p-3 rounded-full">
@@ -434,13 +636,14 @@ export default function DatabaseManagement() {
             </p>
           </div>
         </div>
-      </div>
-      
+      )}
+
       {/* Danger Zone */}
+      {canDelete && (
       <div className="border border-red-200 bg-white rounded-lg p-6 shadow-sm mt-2 flex flex-col gap-4">
          <div>
           <h2 className="text-red-700 font-bold mb-1 flex items-center gap-2"><Trash2 size={18}/> Zona de Perigo (Exclusão)</h2>
-           <p className="text-sm text-slate-500 max-w-3xl">Apaga permanentemente os dados. Se você não selecionar datas, <b>TODA O BANCO DE DADOS SERÁ DESTRUÍDO</b>.</p>
+           <p className="text-sm text-slate-500 max-w-3xl">Apaga permanentemente os dados. Se você não selecionar datas, <b>TODO O BANCO DE DADOS SERÁ DESTRUÍDO</b>.</p>
          </div>
          
          {!showConfirmDelete ? (
@@ -507,6 +710,7 @@ export default function DatabaseManagement() {
            </div>
          )}
       </div>
+      )}
 
       {successMsg && (
         <div className="fixed bottom-5 right-5 z-50 bg-emerald-100 text-emerald-800 p-4 rounded-md shadow-lg flex items-center gap-2 font-semibold text-sm transition-opacity">
