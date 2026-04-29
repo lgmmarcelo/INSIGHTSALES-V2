@@ -23,8 +23,14 @@ export default function RelatorioRetencao() {
   const { rawSales, loading } = useSalesData(startDate, endDate);
 
   const sales = useMemo(() => {
-    return rawSales.filter(d => d.retido === 'Sim' || d.retido === 'Não');
-  }, [rawSales]);
+    return rawSales.filter(d => {
+      // Date Filter
+      if (startDate && (!d.dataAtendimentoIso || d.dataAtendimentoIso < startDate)) return false;
+      if (endDate && (!d.dataAtendimentoIso || d.dataAtendimentoIso > endDate)) return false;
+      
+      return d.retido === 'Sim' || d.retido === 'Não';
+    });
+  }, [rawSales, startDate, endDate]);
 
   useEffect(() => {
     if (monthSelection) {

@@ -1,4 +1,10 @@
 import { useState, useEffect } from 'react';
+
+/**
+ * ⚠️ CABEÇALHO DE PROTEÇÃO DO MOTOR DE DADOS (InsightSales)
+ * AS REGRAS DE IMPORTAÇÃO, CRUZAMENTO (LEFT-JOIN) E GERAÇÃO DE ID DETERMINÍSTICO
+ * NESTE ARQUIVO SÃO IMUTÁVEIS PARA GARANTIR A CONSISTÊNCIA DE 2026.
+ */
 import { collection, getDocs, getCountFromServer, doc, setDoc, writeBatch } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { mutate } from 'swr';

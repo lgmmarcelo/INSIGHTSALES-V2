@@ -135,17 +135,12 @@ export default function Renda() {
 
   // Filter and Group Data
   const groupedData = useMemo(() => {
-    const startObj = startDate ? new Date(startDate + 'T00:00:00') : null;
-    const endObj = endDate ? new Date(endDate + 'T23:59:59') : null;
-
     const map: Record<string, RendaStats> = {};
 
     rawSales.forEach(sale => {
       // Date Filter
-      const saleDate = parseDateLocal(sale.dataAtendimento);
-      if ((startDate || endDate) && !saleDate) return;
-      if (startObj && saleDate && saleDate < startObj) return;
-      if (endObj && saleDate && saleDate > endObj) return;
+      if (startDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso < startDate)) return;
+      if (endDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso > endDate)) return;
 
       // Empreendimento filter
       const saleEmp = normalizeEmpreendimento(sale.empreendimento);

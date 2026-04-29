@@ -1,4 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
+
+/**
+ * ⚠️ PROTOCOLO DE IMUTABILIDADE VOLUMÉTRICA (InsightSales)
+ * A LÓGICA DE FILTRAGEM TEMPORAL E CÁLCULO DE VENDAS BRUTAS/LÍQUIDAS
+ * É PROTEGIDA PARA MANTER OS NÚMEROS CONSOLIDADOS DE 2026.
+ */
 import { differenceInDays, parseDateLocal } from '../lib/utils';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LabelList, Cell } from 'recharts';
 import { Sale } from '../types';
@@ -71,10 +77,9 @@ export default function Dashboard() {
   // Filter logic
   const sales = useMemo(() => {
     return rawSales.filter(sale => {
-      // Date filter using string semantics to handle typo dates without Date wrapping bugs
+      // Date filter using string semantics
       if (startDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso < startDate)) return false;
-      const maxEndBound = endDate ? endDate.substring(0, 8) + '31' : null;
-      if (maxEndBound && sale.dataAtendimentoIso && sale.dataAtendimentoIso > maxEndBound) return false;
+      if (endDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso > endDate)) return false;
 
       // Empreendimento filter
       const saleEmp = normalizeEmpreendimento(sale.empreendimento);

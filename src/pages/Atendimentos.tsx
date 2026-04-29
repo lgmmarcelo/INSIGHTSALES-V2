@@ -1,4 +1,10 @@
 import React, { useState, useEffect, useMemo, Fragment } from 'react';
+
+/**
+ * ⚠️ AVISO DE INTEGRIDADE ESTRUTURAL (InsightSales)
+ * ESTE ARQUIVO CONTÉM A LÓGICA DE AGRUPAMENTO DE COTAS (1 DOC = 1 COTA).
+ * NÃO ALTERAR A LÓGICA DE totals.quantVenda OU groupedSales SEM AUTORIZAÇÃO.
+ */
 import { updateDoc, doc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../context/AuthContext';
@@ -60,14 +66,12 @@ export default function Atendimentos() {
   // Filter logic
   const sales = useMemo(() => {
     let filtered = rawSales;
-    
-    // Apply date filter
-    if (startDate || endDate) {
-        const maxEndBound = endDate ? endDate.substring(0, 8) + '31' : null;
 
+    // Apply date filter (sanity check in case hook fetches wider range or for consistency)
+    if (startDate || endDate) {
         filtered = filtered.filter(sale => {
           if (startDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso < startDate)) return false;
-          if (maxEndBound && sale.dataAtendimentoIso && sale.dataAtendimentoIso > maxEndBound) return false;
+          if (endDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso > endDate)) return false;
           return true;
         });
     }
@@ -83,7 +87,7 @@ export default function Atendimentos() {
     }
 
     return filtered;
-  }, [rawSales, startDate, endDate, searchTerm]);
+  }, [rawSales, searchTerm, startDate, endDate]);
 
   const groupedSales = useMemo(() => {
     const groups: Record<string, any> = {};

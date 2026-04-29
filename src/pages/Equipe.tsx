@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
-import { collection, query, getDocs } from 'firebase/firestore';
-import { db } from '../lib/firebase';
 import { differenceInDays, parseDateLocal } from '../lib/utils';
 import { Sale } from '../types';
+import { useSalesData } from '../hooks/useSalesData';
+import { SkeletonTable } from '../components/ui/SkeletonTable';
 
 interface TeamMetric {
   name: string;
@@ -13,8 +13,8 @@ interface TeamMetric {
 }
 
 export default function Equipe() {
-  const [rawSales, setRawSales] = useState<Sale[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [sortKey, setSortKey] = useState<keyof TeamMetric | 'taxa'>('brutas');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
   // Date filtering state
   const [monthSelection, setMonthSelection] = useState(() => {
@@ -29,9 +29,7 @@ export default function Equipe() {
   // Tab state
   const [activeTab, setActiveTab] = useState<'consultor' | 'captador' | 'to'>('consultor');
 
-  // Sorting state
-  const [sortKey, setSortKey] = useState<keyof TeamMetric | 'taxa'>('brutas');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const { rawSales, loading } = useSalesData(startDate, endDate);
 
   const handleSort = (key: keyof TeamMetric | 'taxa') => {
     if (sortKey === key) {
@@ -63,39 +61,11 @@ export default function Equipe() {
     setMonthSelection('');
   };
 
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      const q = query(collection(db, 'sales'));
-      const querySnapshot = await getDocs(q);
-      const data: Sale[] = [];
-      querySnapshot.forEach((doc) => {
-        data.push({ id: doc.id, ...doc.data() } as Sale);
-      });
-      setRawSales(data);
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // Filter by Date
   const dateFilteredSales = useMemo(() => {
-    if (!startDate && !endDate) return rawSales;
-    
-    const startObj = startDate ? new Date(startDate + 'T00:00:00') : null;
-    const endObj = endDate ? new Date(endDate + 'T23:59:59') : null;
-
     return rawSales.filter(sale => {
-      const saleDate = parseDateLocal(sale.dataAtendimento);
-      if (!saleDate) return false;
-      if (startObj && saleDate < startObj) return false;
-      if (endObj && saleDate > endObj) return false;
+      if (startDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso < startDate)) return false;
+      if (endDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso > endDate)) return false;
       return true;
     });
   }, [rawSales, startDate, endDate]);

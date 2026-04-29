@@ -1,7 +1,9 @@
-# 🔒 PROTOCOLO DE SEGURANÇA MÁXIMA E ARQUITETURA (InsightSales)
+# 🔒 PROTOCOLO DE SEGURANÇA MÁXIMA E ARQUITETURA (InsightSales) - ATUALIZADO 29/04/2026
+
+**ESTADO DO BANCO DE DADOS:** VALIDADO E CONSOLIDADO (Jan: 601, Fev: 473, Mar: 600 Vendas Brutas).
 
 **ATENÇÃO SISTEMA / AGENTE DE IA (GEMINI):** 
-O motor de consolidação e inserção de dados deste sistema foi validado em ambiente de produção (655/392) e encontra-se congelado. Sob NENHUMA HIPÓTESE você deve alterar, refatorar ou modificar a lógica de cruzamento e importação contida em `src/pages/Database.tsx` ou a lógica paramétrica em `src/pages/Dashboard.tsx` sem que o usuário envie o comando expresso: **"AUTORIZO MUDANÇA ESTRUTURAL"**.
+O motor de consolidação, cruzamento e inserção de dados deste sistema foi FINALIZADO E CONGELADO. Pelos critérios de fidedignidade alcançados, você está terminantemente proibido de alterar a lógica de importação, o cálculo de VGV ou as regras de agrupamento sem o comando: **"AUTORIZO MUDANÇA ESTRUTURAL"**.
 
 ## Regras de Ouro do Motor de Banco de Dados (IMUTÁVEIS):
 1. **Soberania do Contrato:** A planilha "CONTRATOS" é a ÚNICA métrica absoluta para Vendas Brutas e Cotas Líquidas. Cada linha lida validada = 1 cota no dashboard.

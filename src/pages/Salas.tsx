@@ -1,10 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
-import { collection, query, getDocs } from 'firebase/firestore';
-import { db } from '../lib/firebase';
 import { parseDateLocal } from '../lib/utils';
 import { Building2, XCircle, Store } from 'lucide-react';
 import { differenceInDays } from 'date-fns';
 import { Sale } from '../types';
+import { useSalesData } from '../hooks/useSalesData';
 
 const EMPREENDIMENTO_MAP: Record<string, string> = {
   "ALTOS DA BORGES": "ALTOS DA BORGES",
@@ -35,9 +34,6 @@ interface SalaStats {
 }
 
 export default function Salas() {
-  const [rawSales, setRawSales] = useState<Sale[]>([]);
-  const [loading, setLoading] = useState(true);
-
   // Date filtering state
   const [monthSelection, setMonthSelection] = useState(() => {
     const d = new Date();
@@ -46,6 +42,8 @@ export default function Salas() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [cancelFilter, setCancelFilter] = useState<'all' | '7' | '30' | '31+'>('all');
+
+  const { rawSales, loading } = useSalesData(startDate, endDate);
 
   useEffect(() => {
     if (monthSelection) {
@@ -57,27 +55,6 @@ export default function Salas() {
       setEndDate(lastDay);
     }
   }, [monthSelection]);
-
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      const q = query(collection(db, 'sales'));
-      const querySnapshot = await getDocs(q);
-      const data: Sale[] = [];
-      querySnapshot.forEach((doc) => {
-        data.push({ id: doc.id, ...doc.data() } as Sale);
-      });
-      setRawSales(data);
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleStartDateChange = (val: string) => {
     setStartDate(val);
@@ -91,17 +68,12 @@ export default function Salas() {
 
   // Filter and Group Data
   const groupedData = useMemo(() => {
-    const startObj = startDate ? new Date(startDate + 'T00:00:00') : null;
-    const endObj = endDate ? new Date(endDate + 'T23:59:59') : null;
-
     const map: Record<string, SalaStats> = {};
 
     rawSales.forEach(sale => {
       // Date Filter
-      const saleDate = parseDateLocal(sale.dataAtendimento);
-      if (!saleDate) return;
-      if (startObj && saleDate < startObj) return;
-      if (endObj && saleDate > endObj) return;
+      if (startDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso < startDate)) return;
+      if (endDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso > endDate)) return;
 
       const salaName = (sale.sala || 'SALA NÃO ESPECIFICADA').trim().toUpperCase();
       const rawEmp = (sale.empreendimento || 'OUTRO').trim().toUpperCase();
