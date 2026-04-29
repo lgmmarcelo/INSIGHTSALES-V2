@@ -40,7 +40,7 @@ export default function Atendimentos() {
     if (monthSelection) {
       const [year, month] = monthSelection.split('-');
       const firstDay = `${year}-${month}-01`;
-      const lastDayDate = new Date(parseInt(year), parseInt(month), 0);
+      const lastDayDate = new Date(parseInt(year, 10), parseInt(month, 10), 0);
       const lastDay = `${year}-${month}-${String(lastDayDate.getDate()).padStart(2, '0')}`;
       setStartDate(firstDay);
       setEndDate(lastDay);
@@ -63,15 +63,11 @@ export default function Atendimentos() {
     
     // Apply date filter
     if (startDate || endDate) {
-        const startObj = startDate ? new Date(startDate + 'T00:00:00') : null;
-        const endObj = endDate ? new Date(endDate + 'T23:59:59') : null;
+        const maxEndBound = endDate ? endDate.substring(0, 8) + '31' : null;
 
         filtered = filtered.filter(sale => {
-          const saleDate = parseDateLocal(sale.dataAtendimento);
-          if (!saleDate) return false;
-          
-          if (startObj && saleDate < startObj) return false;
-          if (endObj && saleDate > endObj) return false;
+          if (startDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso < startDate)) return false;
+          if (maxEndBound && sale.dataAtendimentoIso && sale.dataAtendimentoIso > maxEndBound) return false;
           return true;
         });
     }
@@ -113,7 +109,7 @@ export default function Atendimentos() {
       g.quantVenda += 1;
       g.faturamento += (sale.valor || 0);
 
-      const isCanceled = (!!sale.dataCancelamento || sale.statusContrato === 'CANCELADO') && sale.retido !== 'Sim';
+      const isCanceled = !!sale.dataCancelamento && sale.retido !== 'Sim';
       
       if (sale.dataCancelamento && (!g.dataCancelamento || parseDateLocal(sale.dataCancelamento)! > parseDateLocal(g.dataCancelamento)!)) {
         g.dataCancelamento = sale.dataCancelamento;
@@ -182,7 +178,7 @@ export default function Atendimentos() {
 
     sales.forEach(s => {
       faturamento += (s.valor || 0);
-      const isCanceled = (!!s.dataCancelamento || s.statusContrato === 'CANCELADO') && s.retido !== 'Sim';
+      const isCanceled = !!s.dataCancelamento && s.retido !== 'Sim';
       if (isCanceled) {
           cotasCanceladas += 1;
       } else {
@@ -294,8 +290,53 @@ export default function Atendimentos() {
     }
   };
 
+  const handleClearFields = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!window.confirm("Tem certeza que deseja limpar os dados de atendimento deste lançamento? Isso irá zerar a forma de pagamento, retenção e valores lançados.")) {
+      return;
+    }
+    try {
+      const dbRef = doc(db, 'sales', id);
+      const finalUpdates = {
+        retido: null,
+        valorRetido: null,
+        valorDevolvido: null,
+        formaPagamentoEntrada: null,
+        valorEntradaEfetiva: null,
+        parcelasEntrada: null,
+        dataRetencao: null,
+        usuarioRetencaoId: null,
+        usuarioRetencaoNome: null,
+        dataCancelamento: '',
+        statusContrato: 'ATIVO'
+      };
+      await updateDoc(dbRef, finalUpdates);
+
+      mutate(prev => {
+        if (!prev) return [];
+        return prev.map(s => {
+          if (s.id === id) {
+             return { ...s, ...finalUpdates };
+          }
+          return s;
+        });
+      }, { revalidate: false });
+
+      setEditingRows(prev => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+
+    } catch (err: any) {
+      console.error(err);
+      alert("Erro ao limpar os dados: " + err.message);
+    }
+  };
+
   const canEdit = userRole === 'admin' || userPermissions.includes('edit_atendimentos');
   const canOverride = userRole === 'admin' || userPermissions.includes('override_atendimentos');
+  const canClearData = userRole === 'admin' || userPermissions.includes('clear_atendimentos');
 
   // Utils for Date input conversion: DB uses DD/MM/YYYY, input type="date" uses YYYY-MM-DD
   const formatForInput = (brDate?: string) => {
@@ -441,7 +482,7 @@ export default function Atendimentos() {
                        </tr>
                        
                        {isExpanded && g.contracts.map((s: Sale) => {
-                         const isCanceledLine = (!!s.dataCancelamento || s.statusContrato === 'CANCELADO') && s.retido !== 'Sim';
+                         const isCanceledLine = !!s.dataCancelamento && s.retido !== 'Sim';
                          
                          const isOwner = s.usuarioRetencaoId === currentUser?.uid;
                          const isRecent = s.dataRetencao ? (Date.now() - s.dataRetencao < 1000 * 60 * 60 * 2) : true; // 2 horas para correção pelo próprio autor
@@ -490,18 +531,25 @@ export default function Atendimentos() {
                                       <>
                                         <div className="flex flex-col">
                                           <span className="font-semibold text-[10px] uppercase text-indigo-500 tracking-wider">Entrada Efetiva (R$)</span>
-                                          <input 
-                                            type="number"
-                                            className="text-xs border rounded p-1 bg-white focus:ring-indigo-500 w-[100px]"
-                                            disabled={!canEditRecord}
-                                            value={editingRows[s.id!]?.valorEntradaEfetiva !== undefined ? editingRows[s.id!]?.valorEntradaEfetiva : (s.valorEntradaEfetiva || '')}
-                                            placeholder="Ex: 5000"
-                                            onChange={(e) => handleLocalChange(s.id!, 'valorEntradaEfetiva', parseFloat(e.target.value) || undefined)}
-                                            onClick={(e) => e.stopPropagation()}
-                                          />
+                                          <div className="flex items-center gap-2">
+                                            <input 
+                                              type="number"
+                                              className="text-xs border rounded p-1 bg-white focus:ring-indigo-500 w-[100px]"
+                                              disabled={!canEditRecord}
+                                              value={editingRows[s.id!]?.valorEntradaEfetiva !== undefined ? editingRows[s.id!]?.valorEntradaEfetiva : (s.valorEntradaEfetiva || '')}
+                                              placeholder="Ex: 5000"
+                                              onChange={(e) => handleLocalChange(s.id!, 'valorEntradaEfetiva', parseFloat(e.target.value) || undefined)}
+                                              onClick={(e) => e.stopPropagation()}
+                                            />
+                                            <span className="text-xs font-semibold text-indigo-600 bg-indigo-100 px-2 py-1 rounded text-center min-w-[50px]">
+                                              {s.valor ? 
+                                                (((editingRows[s.id!]?.valorEntradaEfetiva !== undefined ? editingRows[s.id!]?.valorEntradaEfetiva : (s.valorEntradaEfetiva || 0)) as number) / s.valor * 100).toFixed(1) + '%' 
+                                                : '0.0%'}
+                                            </span>
+                                          </div>
                                         </div>
                                         <div className="flex flex-col">
-                                          <span className="font-semibold text-[10px] uppercase text-indigo-500 tracking-wider">Parcelas</span>
+                                          <span className="font-semibold text-[10px] uppercase text-indigo-500 tracking-wider">Parcelas Entrada</span>
                                           <select 
                                             className="text-xs border rounded p-1 bg-white cursor-pointer focus:ring-indigo-500 min-w-[70px]"
                                             disabled={!canEditRecord}
@@ -523,7 +571,7 @@ export default function Atendimentos() {
                                 <div className="flex flex-wrap gap-5 items-end p-2 bg-slate-100/50 rounded-md">
                                   <div className="flex flex-col">
                                     <span className="font-semibold text-[10px] uppercase text-slate-400 tracking-wider">Houve Retenção?</span>
-                                    {s.dataCancelamento || editingRows[s.id!]?.dataCancelamento || s.statusContrato === 'CANCELADO' ? (
+                                    {s.dataCancelamento || editingRows[s.id!]?.dataCancelamento ? (
                                       <select 
                                         className="text-xs border rounded p-1 bg-white cursor-pointer focus:ring-sky-500 max-w-[120px]"
                                         disabled={!canEditRecord}
@@ -573,16 +621,24 @@ export default function Atendimentos() {
                                   </div>
                                 </div>
                               </div>
-                              {editingRows[s.id!] && Object.keys(editingRows[s.id!] || {}).length > 0 && (
-                                <div className="mt-3 w-full flex justify-end">
+                              <div className="mt-3 w-full flex justify-end gap-2">
+                                {canClearData && (
+                                  <button 
+                                    onClick={(e) => handleClearFields(s.id!, e)}
+                                    className="bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 px-3 py-1.5 rounded text-[11px] font-bold shadow-sm flex items-center gap-1 transition-colors"
+                                  >
+                                    <X size={14}/> Limpar Dados
+                                  </button>
+                                )}
+                                {editingRows[s.id!] && Object.keys(editingRows[s.id!] || {}).length > 0 && (
                                   <button 
                                     onClick={(e) => { e.stopPropagation(); handleSaveRow(s.id!, s); }}
                                     className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-[11px] font-bold shadow flex items-center gap-1 transition-colors"
                                   >
                                     <Save size={14}/> Salvar Lançamento
                                   </button>
-                                </div>
-                              )}
+                                )}
+                              </div>
                            </td>
                            <td className="font-semibold text-center text-slate-500">1</td>
                            <td>

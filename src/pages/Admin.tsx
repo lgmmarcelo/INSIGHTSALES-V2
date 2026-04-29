@@ -9,6 +9,7 @@ const PERMISSIONS = [
   { id: 'view_atendimentos', label: 'Visualizar Atendimentos' },
   { id: 'edit_atendimentos', label: 'Registrar Atendimentos (Cancelamentos / Retenção)' },
   { id: 'override_atendimentos', label: 'Editar Atendimentos Efetivados (Gerência/Supervisão)' },
+  { id: 'clear_atendimentos', label: 'Limpar Dados de Atendimentos Lançados' },
   { id: 'view_retencao', label: 'Visualizar Relatório de Retenção' },
   { id: 'db_upload', label: 'Subir planilhas de Contratos e Atendimentos' },
   { id: 'db_export', label: 'Exportar Backup' },

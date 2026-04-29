@@ -42,7 +42,7 @@ export default function Dashboard() {
     if (monthSelection) {
       const [year, month] = monthSelection.split('-');
       const firstDay = `${year}-${month}-01`;
-      const lastDayDate = new Date(parseInt(year), parseInt(month), 0);
+      const lastDayDate = new Date(parseInt(year, 10), parseInt(month, 10), 0);
       const lastDay = `${year}-${month}-${String(lastDayDate.getDate()).padStart(2, '0')}`;
       setStartDate(firstDay);
       setEndDate(lastDay);
@@ -71,14 +71,10 @@ export default function Dashboard() {
   // Filter logic
   const sales = useMemo(() => {
     return rawSales.filter(sale => {
-      // Date filter
-      const saleDate = parseDateLocal(sale.dataAtendimento);
-      const startObj = startDate ? new Date(startDate + 'T00:00:00') : null;
-      const endObj = endDate ? new Date(endDate + 'T23:59:59') : null;
-
-      if ((startDate || endDate) && !saleDate) return false;
-      if (startObj && saleDate && saleDate < startObj) return false;
-      if (endObj && saleDate && saleDate > endObj) return false;
+      // Date filter using string semantics to handle typo dates without Date wrapping bugs
+      if (startDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso < startDate)) return false;
+      const maxEndBound = endDate ? endDate.substring(0, 8) + '31' : null;
+      if (maxEndBound && sale.dataAtendimentoIso && sale.dataAtendimentoIso > maxEndBound) return false;
 
       // Empreendimento filter
       const saleEmp = normalizeEmpreendimento(sale.empreendimento);
@@ -190,7 +186,17 @@ export default function Dashboard() {
     sales.forEach(sale => {
       const parts = String(sale.dataAtendimento || '').split('/');
       if (parts.length === 3) {
-        const day = parseInt(parts[0], 10).toString();
+        let day = parseInt(parts[0], 10).toString();
+        
+        // Handle typo dates (like 29/02 mapped to 28)
+        if (!dailyMap[day]) {
+           let d = parseInt(day, 10);
+           while(d > 1 && !dailyMap[d.toString()]) {
+               d--;
+           }
+           day = d.toString();
+        }
+
         if (dailyMap[day]) {
             dailyMap[day].totalVendas++;
             if (sale.dataCancelamento) {

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { collection, getDocs, getCountFromServer, doc, setDoc, writeBatch } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { mutate } from 'swr';
 import { DownloadCloud, ShieldCheck, Database as DbIcon, Info, Upload, CheckCircle, Trash2, Link } from 'lucide-react';
 import * as xlsx from 'xlsx';
 import { Sale } from '../types';
@@ -46,14 +47,45 @@ export default function DatabaseManagement() {
         const d = doc.data();
         let add = true;
         
-        let isoCompare = d.dataAtendimentoIso;
-        if (!isoCompare && d.dataAtendimento) {
-            const parts = d.dataAtendimento.split('/');
-            if (parts.length === 3) isoCompare = `${parts[2]}-${parts[1]}-${parts[0]}`;
+        let dateToCheck: number | null = null;
+        
+        if (d.dataAtendimento && d.dataAtendimento.includes('/')) {
+            const p = d.dataAtendimento.split('/');
+            if (p.length === 3) {
+                const day = parseInt(p[0], 10);
+                const month = parseInt(p[1], 10) - 1;
+                let year = parseInt(p[2], 10);
+                if (year < 100) year += 2000;
+                dateToCheck = new Date(year, month, day).getTime();
+            }
+        } else if (d.dataAtendimentoIso) {
+            const p = d.dataAtendimentoIso.split('-');
+            if (p.length === 3) {
+                let year = parseInt(p[0], 10);
+                if (year < 100) year += 2000;
+                const month = parseInt(p[1], 10) - 1;
+                const day = parseInt(p[2], 10);
+                dateToCheck = new Date(year, month, day).getTime();
+            }
         }
         
-        if (backupStartDate && isoCompare && isoCompare < backupStartDate) add = false;
-        if (backupEndDate && isoCompare && isoCompare > backupEndDate) add = false;
+        if (dateToCheck !== null) {
+            if (backupStartDate) {
+                const ds = backupStartDate.split('-');
+                const startTimestamp = new Date(parseInt(ds[0], 10), parseInt(ds[1], 10) - 1, parseInt(ds[2], 10)).getTime();
+                if (dateToCheck < startTimestamp) add = false;
+            }
+            if (backupEndDate) {
+                const de = backupEndDate.split('-');
+                const endTimestamp = new Date(parseInt(de[0], 10), parseInt(de[1], 10) - 1, parseInt(de[2], 10)).getTime();
+                if (dateToCheck > endTimestamp) add = false;
+            }
+        } else {
+            // If we have strict backup filters and the date is totally unknown, wait, we should probably still export it if they requested the whole DB.
+            if (backupStartDate || backupEndDate) {
+               add = false; 
+            }
+        }
         
         if (add) {
            data.push({ ...d, id: doc.id });
@@ -97,22 +129,46 @@ export default function DatabaseManagement() {
 
           const data = d.data();
           
-          let isoCompare = data.dataAtendimentoIso;
+          let dateToCheck: number | null = null;
           
-          // Fallback algorithm for old records that don't have the Iso field
-          if (!isoCompare && data.dataAtendimento) {
-             const parts = data.dataAtendimento.split('/');
-             if (parts.length === 3) {
-                 isoCompare = `${parts[2]}-${parts[1]}-${parts[0]}`;
-             }
+          if (data.dataAtendimento && data.dataAtendimento.includes('/')) {
+              const p = data.dataAtendimento.split('/');
+              if (p.length === 3) {
+                  const day = parseInt(p[0], 10);
+                  const month = parseInt(p[1], 10) - 1;
+                  let year = parseInt(p[2], 10);
+                  if (year < 100) year += 2000;
+                  dateToCheck = new Date(year, month, day).getTime();
+              }
+          } else if (data.dataAtendimentoIso) {
+              const p = data.dataAtendimentoIso.split('-'); // e.g. 2026-01-01
+              if (p.length === 3) {
+                  let year = parseInt(p[0], 10);
+                  if (year < 100) year += 2000;
+                  const month = parseInt(p[1], 10) - 1;
+                  const day = parseInt(p[2], 10);
+                  dateToCheck = new Date(year, month, day).getTime();
+              }
           }
 
-          if (!isoCompare) {
-             // If we really can't determine the date, and the user provided wide dates, delete it anyway to clear the corruption.
-             return true; 
+          if (dateToCheck === null) {
+              return false; // Safely skip invalid dates instead of deleting everything!
           }
           
-          return isoCompare >= deleteStartDate && isoCompare <= deleteEndDate;
+          let inRange = true;
+          if (deleteStartDate) {
+              // deleteStartDate is YYYY-MM-DD
+              const ds = deleteStartDate.split('-');
+              const startTimestamp = new Date(parseInt(ds[0], 10), parseInt(ds[1], 10) - 1, parseInt(ds[2], 10)).getTime();
+              if (dateToCheck < startTimestamp) inRange = false;
+          }
+          if (deleteEndDate) {
+              const de = deleteEndDate.split('-');
+              const endTimestamp = new Date(parseInt(de[0], 10), parseInt(de[1], 10) - 1, parseInt(de[2], 10)).getTime();
+              if (dateToCheck > endTimestamp) inRange = false;
+          }
+          
+          return inRange;
        });
 
        if (docsToDelete.length === 0) {
@@ -133,6 +189,7 @@ export default function DatabaseManagement() {
        alert(`Sucesso! ${docsToDelete.length} registros permanentemente apagados do sistema.`);
        
        getCountFromServer(collection(db, 'sales')).then(snap => setRecordCount(snap.data().count)).catch(() => {});
+       mutate((key) => Array.isArray(key) && key[0] === 'sales-query', undefined, { revalidate: true });
        setSuccessMsg('Registros apagados.');
        setShowConfirmDelete(false);
        setConfirmText('');
@@ -369,7 +426,9 @@ export default function DatabaseManagement() {
           if (dataAtendimento && dataAtendimento.includes('/')) {
               const p = dataAtendimento.split('/');
               if(p.length === 3) {
-                  dataAtendimentoIso = `${p[2]}-${p[1]}-${p[0]}`;
+                  let yearStr = p[2];
+                  if (yearStr.length === 2) yearStr = '20' + yearStr;
+                  dataAtendimentoIso = `${yearStr}-${String(p[1]).padStart(2, '0')}-${String(p[0]).padStart(2, '0')}`;
                   
                   // Trava de 3 dias para perfis não admin
                   if (userRole !== 'admin') {
@@ -456,6 +515,7 @@ export default function DatabaseManagement() {
 
       setSuccessMsg(`Sucesso: ${processed} contratos foram atrelados aos seus atendimentos e importados. (${skippedConfig} ignorados).`);
       getCountFromServer(collection(db, 'sales')).then(snap => setRecordCount(snap.data().count)).catch(() => {});
+      mutate((key) => Array.isArray(key) && key[0] === 'sales-query', undefined, { revalidate: true });
       setTimeout(() => setSuccessMsg(''), 8000);
 
     } catch (err: any) {

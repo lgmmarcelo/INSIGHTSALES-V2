@@ -6,7 +6,11 @@ import { Sale } from '../types';
 const fetcher = async ([key, startDate, endDate]: [string, string, string]) => {
   const constraints: any[] = [];
   if (startDate) constraints.push(where("dataAtendimentoIso", ">=", startDate));
-  if (endDate) constraints.push(where("dataAtendimentoIso", "<=", endDate));
+  if (endDate) {
+     // Ensure the string end bound covers typo days like 31 by overriding the day component with 31 for DB query purposes
+     const maxEndBound = endDate.substring(0, 8) + '31';
+     constraints.push(where("dataAtendimentoIso", "<=", maxEndBound));
+  }
   
   const q = query(collection(db, 'sales'), ...constraints);
   const querySnapshot = await getDocs(q);
@@ -27,7 +31,7 @@ export function useSalesData(startDate: string, endDate: string) {
     fetcher,
     {
       revalidateOnFocus: false, // Prevents refetching just because user switched tabs back and forth
-      dedupingInterval: 60000 * 5, // Deduplicate perfectly identical requests within 5 minutes
+      dedupingInterval: 10000, // Reduced to 10s to ensure refetch after db changes
       keepPreviousData: true // Keep showing old data while new data is loading when dates change
     }
   );
