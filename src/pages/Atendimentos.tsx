@@ -69,9 +69,11 @@ export default function Atendimentos() {
 
     // Apply date filter (sanity check in case hook fetches wider range or for consistency)
     if (startDate || endDate) {
+        const maxEndBound = endDate ? endDate.substring(0, 8) + '31' : null;
+
         filtered = filtered.filter(sale => {
           if (startDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso < startDate)) return false;
-          if (endDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso > endDate)) return false;
+          if (maxEndBound && sale.dataAtendimentoIso && sale.dataAtendimentoIso > maxEndBound) return false;
           return true;
         });
     }

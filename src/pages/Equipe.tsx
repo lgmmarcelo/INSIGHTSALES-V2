@@ -65,7 +65,8 @@ export default function Equipe() {
   const dateFilteredSales = useMemo(() => {
     return rawSales.filter(sale => {
       if (startDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso < startDate)) return false;
-      if (endDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso > endDate)) return false;
+      const maxEndBound = endDate ? endDate.substring(0, 8) + '31' : null;
+      if (maxEndBound && sale.dataAtendimentoIso && sale.dataAtendimentoIso > maxEndBound) return false;
       return true;
     });
   }, [rawSales, startDate, endDate]);

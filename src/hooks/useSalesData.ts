@@ -7,7 +7,9 @@ const fetcher = async ([key, startDate, endDate]: [string, string, string]) => {
   const constraints: any[] = [];
   if (startDate) constraints.push(where("dataAtendimentoIso", ">=", startDate));
   if (endDate) {
-     constraints.push(where("dataAtendimentoIso", "<=", endDate));
+     // Ensure the string end bound covers typo days like 31 by overriding the day component with 31 for DB query purposes
+     const maxEndBound = endDate.substring(0, 8) + '31';
+     constraints.push(where("dataAtendimentoIso", "<=", maxEndBound));
   }
   
   const q = query(collection(db, 'sales'), ...constraints);

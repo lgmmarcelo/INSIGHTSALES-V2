@@ -73,7 +73,8 @@ export default function Salas() {
     rawSales.forEach(sale => {
       // Date Filter
       if (startDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso < startDate)) return;
-      if (endDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso > endDate)) return;
+      const maxEndBound = endDate ? endDate.substring(0, 8) + '31' : null;
+      if (maxEndBound && sale.dataAtendimentoIso && sale.dataAtendimentoIso > maxEndBound) return;
 
       const salaName = (sale.sala || 'SALA NÃO ESPECIFICADA').trim().toUpperCase();
       const rawEmp = (sale.empreendimento || 'OUTRO').trim().toUpperCase();

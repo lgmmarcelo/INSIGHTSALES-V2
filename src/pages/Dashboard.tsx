@@ -77,9 +77,10 @@ export default function Dashboard() {
   // Filter logic
   const sales = useMemo(() => {
     return rawSales.filter(sale => {
-      // Date filter using string semantics
+      // Date filter using string semantics to handle typo dates without Date wrapping bugs
       if (startDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso < startDate)) return false;
-      if (endDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso > endDate)) return false;
+      const maxEndBound = endDate ? endDate.substring(0, 8) + '31' : null;
+      if (maxEndBound && sale.dataAtendimentoIso && sale.dataAtendimentoIso > maxEndBound) return false;
 
       // Empreendimento filter
       const saleEmp = normalizeEmpreendimento(sale.empreendimento);

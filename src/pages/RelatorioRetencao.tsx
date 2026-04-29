@@ -26,7 +26,8 @@ export default function RelatorioRetencao() {
     return rawSales.filter(d => {
       // Date Filter
       if (startDate && (!d.dataAtendimentoIso || d.dataAtendimentoIso < startDate)) return false;
-      if (endDate && (!d.dataAtendimentoIso || d.dataAtendimentoIso > endDate)) return false;
+      const maxEndBound = endDate ? endDate.substring(0, 8) + '31' : null;
+      if (maxEndBound && d.dataAtendimentoIso && d.dataAtendimentoIso > maxEndBound) return false;
       
       return d.retido === 'Sim' || d.retido === 'Não';
     });

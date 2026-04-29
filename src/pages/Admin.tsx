@@ -49,6 +49,7 @@ export default function Admin() {
   const [editingUser, setEditingUser] = useState<any | null>(null);
   const [editDisplayName, setEditDisplayName] = useState('');
   const [editRole, setEditRole] = useState('');
+  const [editPassword, setEditPassword] = useState('');
   
   // Custom Profiles
   const [profiles, setProfiles] = useState<AccessProfile[]>([]);
@@ -140,6 +141,7 @@ export default function Admin() {
       setEditingUser(user);
       setEditDisplayName(user.displayName || '');
       setEditRole(user.role || 'analyst');
+      setEditPassword('');
   };
 
   const handleUpdateUser = async (e: React.FormEvent) => {
@@ -149,11 +151,17 @@ export default function Admin() {
       setLoading(true);
       try {
           const userRef = doc(db, 'users', editingUser.id);
-          await updateDoc(userRef, {
+          const updateData: any = {
               displayName: editDisplayName,
               role: editRole,
               updatedAt: Date.now()
-          });
+          };
+          
+          if (editPassword.trim()) {
+              updateData.senhaProvisoria = editPassword.trim();
+          }
+
+          await updateDoc(userRef, updateData);
           setSuccessMsg("Usuário atualizado com sucesso.");
           setEditingUser(null);
           fetchUsers();
@@ -368,22 +376,18 @@ export default function Admin() {
                     </div>
 
                     {canResetPasswords && (
-                    <div className="bg-amber-50 border border-amber-200 p-3 rounded-md">
-                        <div className="flex flex-col gap-2">
-                            <label className="text-xs font-bold text-amber-700 uppercase flex items-center gap-1">
-                                <Key size={14} /> Segurança
-                            </label>
-                            <p className="text-[11px] text-amber-600 leading-tight">
-                                Por segurança, as senhas não podem ser alteradas manualmente aqui. Para registrar uma nova senha, envie um link de redefinição para o e-mail do usuário.
-                            </p>
-                            <button 
-                                type="button"
-                                onClick={handleResetPasswordEmail}
-                                className="mt-1 bg-white border border-amber-300 text-amber-700 text-xs font-bold py-2 rounded shadow-sm hover:bg-amber-100 flex items-center justify-center gap-2 transition-colors"
-                            >
-                                <Mail size={14} /> Enviar Redefinição de Senha
-                            </button>
-                        </div>
+                    <div className="flex flex-col gap-1">
+                        <label className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1">
+                            <Key size={14} /> Nova Senha
+                        </label>
+                        <input 
+                            type="text" 
+                            value={editPassword} 
+                            onChange={e=>setEditPassword(e.target.value)} 
+                            className="input-field" 
+                            placeholder="Deixe em branco para manter a senha atual"
+                            minLength={6}
+                        />
                     </div>
                     )}
 
