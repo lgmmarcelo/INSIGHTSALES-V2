@@ -5,7 +5,7 @@ import React, { useState, useEffect, useMemo, Fragment } from 'react';
  * ESTE ARQUIVO CONTÉM A LÓGICA DE AGRUPAMENTO DE COTAS (1 DOC = 1 COTA).
  * NÃO ALTERAR A LÓGICA DE totals.quantVenda OU groupedSales SEM AUTORIZAÇÃO.
  */
-import { updateDoc, doc } from 'firebase/firestore';
+import { updateDoc, doc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../context/AuthContext';
 import { parseDateLocal } from '../lib/utils';
@@ -32,6 +32,25 @@ export default function Atendimentos() {
   const [searchTerm, setSearchTerm] = useState('');
   
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [analysts, setAnalysts] = useState<{id: string, displayName: string, email: string}[]>([]);
+
+  useEffect(() => {
+    const fetchAnalysts = async () => {
+      try {
+        const q = query(collection(db, 'users'), where('role', '==', 'analyst'));
+        const snap = await getDocs(q);
+        const list = snap.docs.map(d => ({
+          id: d.id,
+          displayName: d.data().displayName || '',
+          email: d.data().email || ''
+        }));
+        setAnalysts(list);
+      } catch (err) {
+        console.error("Erro ao buscar analistas:", err);
+      }
+    };
+    fetchAnalysts();
+  }, []);
 
   const toggleGroup = (id: string) => {
     setExpandedGroups(prev => {
@@ -248,23 +267,30 @@ export default function Atendimentos() {
       const dbRef = doc(db, 'sales', id);
       const finalUpdates: any = { ...updates };
       
-      if ('retido' in updates) {
-        if (updates.retido === 'Sim') {
+      // Auto-assign current user if analyst wasn't manually selected but retention state changed
+      if ('retido' in updates && !updates.usuarioRetencaoId) {
+        if (updates.retido === 'Sim' || updates.retido === 'Não') {
           finalUpdates.dataRetencao = Date.now();
           finalUpdates.usuarioRetencaoId = currentUser?.uid || '';
-          finalUpdates.usuarioRetencaoNome = currentUser?.email || 'Usuário Desconhecido';
-          finalUpdates.valorDevolvido = 0; // Clear opposing field
-        } else if (updates.retido === 'Não') {
-          finalUpdates.dataRetencao = Date.now();
-          finalUpdates.usuarioRetencaoId = currentUser?.uid || '';
-          finalUpdates.usuarioRetencaoNome = currentUser?.email || 'Usuário Desconhecido';
-          finalUpdates.valorRetido = 0; // Clear opposing field
+          finalUpdates.usuarioRetencaoNome = currentUser?.displayName || currentUser?.email || 'Usuário Desconhecido';
+          
+          if (updates.retido === 'Sim') finalUpdates.valorDevolvido = 0;
+          else finalUpdates.valorRetido = 0;
         } else if (updates.retido === '') {
           finalUpdates.dataRetencao = null;
           finalUpdates.usuarioRetencaoId = null;
           finalUpdates.usuarioRetencaoNome = null;
           finalUpdates.valorRetido = 0;
           finalUpdates.valorDevolvido = 0;
+        }
+      }
+
+      // Handle manual analyst selection
+      if (updates.usuarioRetencaoId) {
+        const selectedAnalyst = analysts.find(a => a.id === updates.usuarioRetencaoId);
+        if (selectedAnalyst) {
+          finalUpdates.usuarioRetencaoNome = selectedAnalyst.displayName || selectedAnalyst.email;
+          finalUpdates.dataRetencao = Date.now();
         }
       }
 
@@ -623,7 +649,22 @@ export default function Atendimentos() {
                                   </div>
                                   <div className="flex flex-col">
                                     <span className="font-semibold text-[10px] uppercase text-slate-400 tracking-wider">Analista</span>
-                                    <span className="text-slate-600 font-medium text-[11px] mt-1">{(s.retido === 'Sim' || s.retido === 'Não') ? s.usuarioRetencaoNome?.split('@')[0] || 'Registrado' : '-'}</span>
+                                    {(editingRows[s.id!]?.retido ?? s.retido) ? (
+                                      <select 
+                                        className="text-[11px] border rounded p-1 bg-white cursor-pointer focus:ring-sky-500 mt-1 min-w-[140px]"
+                                        disabled={!canEditRecord}
+                                        value={editingRows[s.id!]?.usuarioRetencaoId !== undefined ? editingRows[s.id!]?.usuarioRetencaoId : (s.usuarioRetencaoId || '')}
+                                        onChange={(e) => handleLocalChange(s.id!, 'usuarioRetencaoId', e.target.value)}
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        <option value="">Selecione o Analista...</option>
+                                        {analysts.map(a => (
+                                          <option key={a.id} value={a.id}>{a.displayName || a.email.split('@')[0]}</option>
+                                        ))}
+                                      </select>
+                                    ) : (
+                                      <span className="text-slate-400 text-[11px] italic mt-1">-</span>
+                                    )}
                                   </div>
                                 </div>
                               </div>
