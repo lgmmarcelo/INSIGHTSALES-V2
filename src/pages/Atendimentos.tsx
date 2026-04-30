@@ -65,8 +65,7 @@ export default function Atendimentos() {
     if (monthSelection) {
       const [year, month] = monthSelection.split('-');
       const firstDay = `${year}-${month}-01`;
-      const lastDayDate = new Date(parseInt(year, 10), parseInt(month, 10), 0);
-      const lastDay = `${year}-${month}-${String(lastDayDate.getDate()).padStart(2, '0')}`;
+      const lastDay = `${year}-${month}-31`;
       setStartDate(firstDay);
       setEndDate(lastDay);
     }
@@ -88,11 +87,9 @@ export default function Atendimentos() {
 
     // Apply date filter (sanity check in case hook fetches wider range or for consistency)
     if (startDate || endDate) {
-        const maxEndBound = endDate ? endDate.substring(0, 8) + '31' : null;
-
         filtered = filtered.filter(sale => {
           if (startDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso < startDate)) return false;
-          if (maxEndBound && sale.dataAtendimentoIso && sale.dataAtendimentoIso > maxEndBound) return false;
+          if (endDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso > endDate)) return false;
           return true;
         });
     }

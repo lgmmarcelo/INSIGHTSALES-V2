@@ -26,8 +26,7 @@ export default function RelatorioRetencao() {
     return rawSales.filter(d => {
       // Date Filter
       if (startDate && (!d.dataAtendimentoIso || d.dataAtendimentoIso < startDate)) return false;
-      const maxEndBound = endDate ? endDate.substring(0, 8) + '31' : null;
-      if (maxEndBound && d.dataAtendimentoIso && d.dataAtendimentoIso > maxEndBound) return false;
+      if (endDate && (!d.dataAtendimentoIso || d.dataAtendimentoIso > endDate)) return false;
       
       return d.retido === 'Sim' || d.retido === 'Não';
     });
@@ -37,8 +36,7 @@ export default function RelatorioRetencao() {
     if (monthSelection) {
       const [year, month] = monthSelection.split('-');
       const firstDay = `${year}-${month}-01`;
-      const lastDayDate = new Date(parseInt(year), parseInt(month), 0);
-      const lastDay = `${year}-${month}-${String(lastDayDate.getDate()).padStart(2, '0')}`;
+      const lastDay = `${year}-${month}-31`;
       setStartDate(firstDay);
       setEndDate(lastDay);
     }

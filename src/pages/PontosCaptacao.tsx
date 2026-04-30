@@ -33,8 +33,7 @@ export default function PontosCaptacao() {
     if (monthSelection) {
       const [year, month] = monthSelection.split('-');
       const firstDay = `${year}-${month}-01`;
-      const lastDayDate = new Date(parseInt(year), parseInt(month), 0);
-      const lastDay = `${year}-${month}-${String(lastDayDate.getDate()).padStart(2, '0')}`;
+      const lastDay = `${year}-${month}-31`;
       setStartDate(firstDay);
       setEndDate(lastDay);
     }
@@ -57,8 +56,7 @@ export default function PontosCaptacao() {
     rawSales.forEach(sale => {
       // Date Filter
       if (startDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso < startDate)) return;
-      const maxEndBound = endDate ? endDate.substring(0, 8) + '31' : null;
-      if (maxEndBound && sale.dataAtendimentoIso && sale.dataAtendimentoIso > maxEndBound) return;
+      if (endDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso > endDate)) return;
 
       const salaName = (sale.sala || 'SALA NÃO ESPECIFICADA').trim().toUpperCase();
       const rawPonto = (sale.pontoCaptacao || 'PONTO NÃO ESPECIFICADO').trim().toUpperCase();

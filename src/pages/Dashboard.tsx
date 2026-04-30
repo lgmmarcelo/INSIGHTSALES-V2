@@ -48,8 +48,7 @@ export default function Dashboard() {
     if (monthSelection) {
       const [year, month] = monthSelection.split('-');
       const firstDay = `${year}-${month}-01`;
-      const lastDayDate = new Date(parseInt(year, 10), parseInt(month, 10), 0);
-      const lastDay = `${year}-${month}-${String(lastDayDate.getDate()).padStart(2, '0')}`;
+      const lastDay = `${year}-${month}-31`;
       setStartDate(firstDay);
       setEndDate(lastDay);
     }
@@ -77,10 +76,9 @@ export default function Dashboard() {
   // Filter logic
   const sales = useMemo(() => {
     return rawSales.filter(sale => {
-      // Date filter using string semantics to handle typo dates without Date wrapping bugs
+      // Date filter using string semantics
       if (startDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso < startDate)) return false;
-      const maxEndBound = endDate ? endDate.substring(0, 8) + '31' : null;
-      if (maxEndBound && sale.dataAtendimentoIso && sale.dataAtendimentoIso > maxEndBound) return false;
+      if (endDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso > endDate)) return false;
 
       // Empreendimento filter
       const saleEmp = normalizeEmpreendimento(sale.empreendimento);

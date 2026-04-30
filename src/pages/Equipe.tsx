@@ -44,8 +44,7 @@ export default function Equipe() {
     if (monthSelection) {
       const [year, month] = monthSelection.split('-');
       const firstDay = `${year}-${month}-01`;
-      const lastDayDate = new Date(parseInt(year), parseInt(month), 0);
-      const lastDay = `${year}-${month}-${String(lastDayDate.getDate()).padStart(2, '0')}`;
+      const lastDay = `${year}-${month}-31`;
       setStartDate(firstDay);
       setEndDate(lastDay);
     }
@@ -65,8 +64,7 @@ export default function Equipe() {
   const dateFilteredSales = useMemo(() => {
     return rawSales.filter(sale => {
       if (startDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso < startDate)) return false;
-      const maxEndBound = endDate ? endDate.substring(0, 8) + '31' : null;
-      if (maxEndBound && sale.dataAtendimentoIso && sale.dataAtendimentoIso > maxEndBound) return false;
+      if (endDate && (!sale.dataAtendimentoIso || sale.dataAtendimentoIso > endDate)) return false;
       return true;
     });
   }, [rawSales, startDate, endDate]);
