@@ -587,7 +587,7 @@ export default function Atendimentos() {
                                             onClick={(e) => e.stopPropagation()}
                                           >
                                             <option value="">--</option>
-                                            {[...Array(12)].map((_, i) => (
+                                            {[...Array(20)].map((_, i) => (
                                               <option key={i+1} value={i+1}>{i+1}x</option>
                                             ))}
                                           </select>
