@@ -30,6 +30,13 @@ export default function DatabaseManagement() {
   // States for cross-uploading
   const [fileContratos, setFileContratos] = useState<File | null>(null);
   const [fileAtendimentos, setFileAtendimentos] = useState<File | null>(null);
+  const [loadingManualBackup, setLoadingManualBackup] = useState(false);
+  const [fileManualRestore, setFileManualRestore] = useState<File | null>(null);
+  const [manualBackupStartDate, setManualBackupStartDate] = useState('');
+  const [manualBackupEndDate, setManualBackupEndDate] = useState('');
+  const [manualRestoreStartDate, setManualRestoreStartDate] = useState('');
+  const [manualRestoreEndDate, setManualRestoreEndDate] = useState('');
+
 
   // States for targeted deletion
   const [deleteStartDate, setDeleteStartDate] = useState('');
@@ -120,6 +127,138 @@ export default function DatabaseManagement() {
       alert("Erro ao gerar backup: " + e.message);
     } finally {
       setLoadingBackup(false);
+    }
+  };
+
+  const handleManualDataExport = async () => {
+    setLoadingManualBackup(true);
+    try {
+      const snap = await getDocs(collection(db, 'sales'));
+      const manualEntries: any[] = [];
+      snap.forEach(doc => {
+          const d = doc.data();
+          const hasManualData = d.formaPagamentoEntrada || d.valorEntradaEfetiva || d.parcelasEntrada || d.retido || d.dataSolicitacao;
+          const docDate = d.dataVendaIso || d.dataAtendimentoIso || "";
+          
+          let passesFilter = true;
+          if (manualBackupStartDate && docDate < manualBackupStartDate) passesFilter = false;
+          if (manualBackupEndDate && docDate > manualBackupEndDate) passesFilter = false;
+          
+          if (hasManualData && passesFilter) {
+              manualEntries.push({
+                 _match_localizador: d.localizador || '',
+                 _match_cpf: d.cpf || '',
+                 _match_cliente: d.cliente || '',
+                 formaPagamentoEntrada: d.formaPagamentoEntrada || '',
+                 valorEntradaEfetiva: d.valorEntradaEfetiva !== undefined ? d.valorEntradaEfetiva : '',
+                 parcelasEntrada: d.parcelasEntrada || '',
+                 retido: d.retido || '',
+                 valorRetido: d.valorRetido !== undefined ? d.valorRetido : '',
+                 valorDevolvido: d.valorDevolvido !== undefined ? d.valorDevolvido : '',
+                 dataSolicitacao: d.dataSolicitacao || '',
+                 usuarioRetencaoId: d.usuarioRetencaoId || '',
+                 usuarioRetencaoNome: d.usuarioRetencaoNome || '',
+                 dataRetencao: d.dataRetencao || ''
+              });
+          }
+      });
+      if(manualEntries.length === 0){
+         alert("Nenhum dado manual encontrado para backup!");
+         return;
+      }
+      const ws = xlsx.utils.json_to_sheet(manualEntries);
+      const wb = xlsx.utils.book_new();
+      xlsx.utils.book_append_sheet(wb, ws, "Trabalhos Manuais");
+      xlsx.writeFile(wb, `Backup_DadosManuais_InsightSales_${new Date().toISOString().split('T')[0]}.xlsx`);
+    } catch(e:any) {
+      alert("Erro ao exportar dados manuais: " + e.message);
+    } finally {
+      setLoadingManualBackup(false);
+    }
+  };
+
+  const handleManualDataRestore = async () => {
+    if (!fileManualRestore) return;
+    setLoadingManualBackup(true);
+    setUploadStatusText('Lendo backup de Trabalhos Manuais...');
+    setSuccessMsg('');
+    try {
+        const data = await readExcelDict(fileManualRestore);
+        if (data.length === 0) throw new Error('A planilha está vazia.');
+        
+        setUploadStatusText('Procurando e atualizando correspondências no banco atual...');
+        const snap = await getDocs(collection(db, 'sales'));
+        const currentSales = snap.docs.map(d => ({ id: d.id, data: d.data() }));
+        
+        let matchedCount = 0;
+        let batchCount = 0;
+        let currentBatch = writeBatch(db);
+        
+        for (const row of data) {
+           const loc = String(row._match_localizador || row.localizador || '').trim();
+           const cpf = String(row._match_cpf || row.cpf || '').trim();
+           const cliente = String(row._match_cliente || row.cliente || '').trim();
+           
+           if (!loc && !cpf && !cliente) continue;
+           
+           const matches = currentSales.filter(s => {
+               const sLoc = String(s.data.localizador || '').trim();
+               const sCpf = String(s.data.cpf || '').trim();
+               const sCliente = String(s.data.cliente || '').trim();
+               
+               let score = 0;
+               if (loc && sLoc === loc) score++;
+               if (cpf && sCpf === cpf) score++;
+               if (cliente && sCliente === cliente) score++;
+               
+               return score >= 2;
+           });
+           
+           for (const match of matches) {
+               const docDate = match.data.dataVendaIso || match.data.dataAtendimentoIso || "";
+               let passesFilter = true;
+               if (manualRestoreStartDate && docDate < manualRestoreStartDate) passesFilter = false;
+               if (manualRestoreEndDate && docDate > manualRestoreEndDate) passesFilter = false;
+               if (!passesFilter) continue;
+
+               const updates: any = {};
+               if (row.formaPagamentoEntrada) updates.formaPagamentoEntrada = row.formaPagamentoEntrada;
+               if (row.valorEntradaEfetiva !== undefined && row.valorEntradaEfetiva !== null && row.valorEntradaEfetiva !== '') updates.valorEntradaEfetiva = Number(row.valorEntradaEfetiva);
+               if (row.parcelasEntrada) updates.parcelasEntrada = String(row.parcelasEntrada);
+               if (row.retido) updates.retido = row.retido;
+               if (row.valorRetido !== undefined && row.valorRetido !== null && row.valorRetido !== '') updates.valorRetido = Number(row.valorRetido);
+               if (row.valorDevolvido !== undefined && row.valorDevolvido !== null && row.valorDevolvido !== '') updates.valorDevolvido = Number(row.valorDevolvido);
+               if (row.dataSolicitacao) updates.dataSolicitacao = row.dataSolicitacao;
+               if (row.usuarioRetencaoId) updates.usuarioRetencaoId = row.usuarioRetencaoId;
+               if (row.usuarioRetencaoNome) updates.usuarioRetencaoNome = row.usuarioRetencaoNome;
+               if (row.dataRetencao) updates.dataRetencao = Number(row.dataRetencao);
+               
+               if (Object.keys(updates).length > 0) {
+                   currentBatch.update(doc(db, 'sales', match.id), updates);
+                   matchedCount++;
+                   batchCount++;
+                   
+                   if (batchCount >= 400) {
+                      await currentBatch.commit();
+                      currentBatch = writeBatch(db);
+                      batchCount = 0;
+                   }
+               }
+           }
+        }
+        
+        if (batchCount > 0) {
+            await currentBatch.commit();
+        }
+        
+        setSuccessMsg(`Sucesso: ${matchedCount} cotas receberam a restauração dos Trabalhos Manuais de forma segura.`);
+        setFileManualRestore(null);
+        mutate((key) => Array.isArray(key) && key[0] === 'sales-query', undefined, { revalidate: true });
+    } catch(err: any) {
+        alert("Erro ao restaurar manuais: " + err.message);
+    } finally {
+        setUploadStatusText('');
+        setLoadingManualBackup(false);
     }
   };
 
@@ -376,11 +515,8 @@ export default function DatabaseManagement() {
       let skippedConfig = 0;
       let currentBatch = writeBatch(db);
       let batchCount = 0;
-      
-      const docIdCounts: Record<string, number> = {};
 
       for (const cRow of dataContratos) {
-          // Headers protection
           const headCheck = String(cRow['A'] || '').toUpperCase();
           if (headCheck.includes('LOCALIZADOR') || headCheck.includes('STATUS')) continue;
 
@@ -398,12 +534,10 @@ export default function DatabaseManagement() {
           let baseDocId = codigo || (localizador ? `${localizador}-S/Cod` : `cota-SemCod`);
           baseDocId = baseDocId.replace(/\//g, '-').replace(/\\/g, '-').trim();
 
-          // Anti-Sobreposição Determinística: Controla duplicatas baseadas no mesmo código 
-          // durante a mesma importação, para não gerar IDs infinitos, permitindo que subidas das 
-          // mesmas planilhas sobrescrevam (merge) a mesma combinação exata de cota irmã.
-          docIdCounts[baseDocId] = (docIdCounts[baseDocId] || 0) + 1;
-          const occurrence = docIdCounts[baseDocId];
-          const docId = occurrence > 1 ? `${baseDocId}-${occurrence}` : baseDocId;
+          // Como exigido pelas regras de ouro e pelo usuário: 
+          // "TODO documento criado recebe incondicionalmente um sufixo randômico gerado após seu código principal, abolindo 100% o risco de apagamento por sombreamento"
+          const randomSuffix = Math.random().toString(36).substring(2, 7).toUpperCase();
+          const docId = `${baseDocId}-${randomSuffix}`;
 
           const cpf1 = String(cRow['H'] || '').replace(/\D/g, '');
           const cpf2 = String(cRow['K'] || '').replace(/\D/g, '');
@@ -679,9 +813,104 @@ export default function DatabaseManagement() {
       </div>
       )}
 
+      {/* Backup Manuais */}
+      {(canExport || canRestore) && (
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mt-5">
+        {canExport && (
+        <div className="bg-white p-6 border border-slate-200 rounded-lg shadow-sm flex flex-col">
+          <div className="flex items-center gap-3 mb-4 text-indigo-700">
+            <div className="bg-indigo-100 p-3 rounded-full">
+              <DownloadCloud size={24} />
+            </div>
+            <div>
+              <h2 className="font-bold text-lg leading-tight">Backup Parcial: Somente Trabalhos Manuais</h2>
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-widest">Aba Atendimentos</span>
+            </div>
+          </div>
+          
+          <p className="text-sm text-slate-600 mb-6 flex-1">
+            Gera uma planilha inteligente contendo <b>apenas as cotas</b> cujos dados de preenchimento manual (Forma de pgto, Parcelas, Valores de retenção) foram modificados no sistema. Útil para extrair o esforço manual da equipe antes de limpar o banco e realizar uma reimportação absoluta.
+          </p>
+
+          <div className="flex flex-col md:flex-row gap-4 mb-6 p-4 bg-slate-50 rounded-lg border border-slate-100">
+            <div className="flex-1">
+              <label className="block text-xs font-bold text-slate-600 mb-1">Data Início (opcional)</label>
+              <input type="date" value={manualBackupStartDate} onChange={(e) => setManualBackupStartDate(e.target.value)} className="w-full text-sm border-slate-300 rounded-md focus:ring-indigo-500 py-1.5 px-3" />
+            </div>
+            <div className="flex-1">
+              <label className="block text-xs font-bold text-slate-600 mb-1">Data Fim (opcional)</label>
+              <input type="date" value={manualBackupEndDate} onChange={(e) => setManualBackupEndDate(e.target.value)} className="w-full text-sm border-slate-300 rounded-md focus:ring-indigo-500 py-1.5 px-3" />
+            </div>
+          </div>
+          
+          <div className="flex items-center justify-between mt-auto">
+            <span className="text-xs font-semibold text-slate-500 flex items-center gap-1">
+              <DbIcon size={14}/> {recordCount !== null ? `Pronto para rastrear em ${recordCount} cotas` : 'Lendo dados...'}
+            </span>
+            <button 
+              onClick={handleManualDataExport}
+              disabled={loadingManualBackup || loadingUpload || recordCount === 0}
+              className="bg-indigo-600 text-white font-bold py-2.5 px-6 rounded-md shadow-sm transition-colors hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
+            >
+              {loadingManualBackup ? 'Gerando...' : 'Exportar Trabalhos Manuais (.XLSX)'}
+            </button>
+          </div>
+        </div>
+        )}
+
+        {canRestore && (
+        <div className="bg-indigo-50 p-6 border border-indigo-200 rounded-lg shadow-sm flex flex-col">
+          <div className="flex items-center gap-3 mb-4 text-indigo-700">
+            <div className="bg-indigo-100 p-3 rounded-full">
+              <Upload size={24} />
+            </div>
+            <div>
+              <h2 className="font-bold text-lg leading-tight">Injeção Inteligente de Trabalhos Manuais</h2>
+              <span className="text-xs font-semibold text-indigo-600/80 uppercase tracking-widest">Merge Automático</span>
+            </div>
+          </div>
+          
+          <p className="text-sm text-indigo-800/80 mb-6 flex-1">
+            Reinjeta os dados manuais na nuvem após uma nova carga ou faxina no sistema. O motor usa inferência (Localizador, CPF, Nome) para colar seus dados manuais nas novas linhas importadas que tiverem IDs diferentes.
+          </p>
+          
+          <div className={`p-4 border border-dashed rounded-lg flex flex-col gap-2 transition-colors mb-6 ${fileManualRestore ? 'border-indigo-400 bg-indigo-100/50' : 'border-indigo-300 bg-white'}`}>
+              <span className="font-semibold text-sm text-indigo-900">Arquivo de Trabalhos Manuais (.xlsx)</span>
+              <input 
+                 type="file" accept=".xlsx, .xls"
+                 onChange={(e) => setFileManualRestore(e.target.files?.[0] || null)}
+                 className="text-xs cursor-pointer file:mr-4 file:rounded-md file:border-0 file:bg-indigo-200 file:text-indigo-800 file:px-4 file:py-2 file:text-xs file:font-bold hover:file:bg-indigo-300"
+              />
+          </div>
+
+          <div className="flex flex-col md:flex-row gap-4 mb-6 p-4 bg-indigo-100/50 rounded-lg border border-indigo-200">
+            <div className="flex-1">
+              <label className="block text-xs font-bold text-indigo-900 mb-1">Injetar a partir de (opcional)</label>
+              <input type="date" value={manualRestoreStartDate} onChange={(e) => setManualRestoreStartDate(e.target.value)} className="w-full text-sm border-indigo-300 rounded-md focus:ring-indigo-500 py-1.5 px-3 bg-white" />
+            </div>
+            <div className="flex-1">
+              <label className="block text-xs font-bold text-indigo-900 mb-1">Injetar até (opcional)</label>
+              <input type="date" value={manualRestoreEndDate} onChange={(e) => setManualRestoreEndDate(e.target.value)} className="w-full text-sm border-indigo-300 rounded-md focus:ring-indigo-500 py-1.5 px-3 bg-white" />
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end mt-auto">
+            <button 
+              onClick={handleManualDataRestore}
+              disabled={loadingManualBackup || loadingUpload || !fileManualRestore}
+              className="bg-indigo-600 outline-none text-white font-bold py-2.5 px-6 rounded-md shadow-sm transition-colors hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
+            >
+              <Upload size={16}/> Injetar Dados Manuais Seguros
+            </button>
+          </div>
+        </div>
+        )}
+      </div>
+      )}
+
       {/* Info Card */}
       {canUpload && (
-        <div className="bg-emerald-50 p-6 border border-emerald-100 rounded-lg shadow-sm flex flex-col">
+        <div className="bg-emerald-50 p-6 border border-emerald-100 rounded-lg mt-5 shadow-sm flex flex-col">
           <div className="flex items-center gap-3 mb-4 text-emerald-800">
             <div className="bg-emerald-100 p-3 rounded-full">
               <ShieldCheck size={24} />
