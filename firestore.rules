@@ -41,13 +41,21 @@ service cloud.firestore {
         return getUserRole() == 'viewer';
     }
 
+    // Role-based Access Control for Custom Profiles
+    function hasPermission(perm) {
+        let role = getUserRole();
+        return role == 'admin' || 
+               (role != 'viewer' && role != 'analyst' && role != 'none' && 
+                exists(/databases/$(database)/documents/access_profiles/$(role)) &&
+                perm in get(/databases/$(database)/documents/access_profiles/$(role)).data.permissions);
+    }
+
     // --- Entity Blueprint Validation ---
 
     function isValidUser(data) {
         return data.keys().hasAll(['email', 'role', 'createdAt']) && 
-               data.keys().size() == 3 &&
                data.email is string && data.email.size() <= 200 &&
-               data.role is string && data.role.size() <= 20 &&
+               data.role is string && data.role.size() <= 60 &&
                data.createdAt is number;
     }
 
@@ -66,26 +74,31 @@ service cloud.firestore {
     // --- Path Rules ---
 
     match /users/{userId} {
-        // Only Admins can list and read all users
-        allow list: if isAdmin();
+        // Admins and those with user config permissions can list all users
+        allow list: if isAdmin() || hasPermission('view_usuarios');
         
-        // A user can always read their own profile, without triggering other lookups
-        allow get: if request.auth != null && request.auth.uid == userId;
+        // A user can always read their own profile, or admins/managers can read
+        allow get: if (request.auth != null && request.auth.uid == userId) || isAdmin() || hasPermission('view_usuarios');
 
-        // Creating their own user document if they are the owner
+        // Creating their own bootstrap user document
         allow create: if request.auth != null && request.auth.uid == userId && 
             incoming().email == 'marcelo@laghettomultipropriedade.com.br' && 
             incoming().role == 'admin';
 
-        // An Admin can also create users
-        allow create: if isAdmin() && isValidUser(incoming());
+        // Admins and Managers can create users
+        allow create: if (isAdmin() || hasPermission('view_usuarios')) && isValidUser(incoming());
 
-        // UPDATE
-        allow update: if isValidId(userId) && isValidUser(incoming()) && isAdmin() &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['role', 'email', 'createdAt']);
+        // UPDATE - Admins and Managers
+        allow update: if isValidId(userId) && isValidUser(incoming()) && (isAdmin() || hasPermission('view_usuarios')) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['role', 'displayName', 'senhaProvisoria', 'updatedAt']);
 
         // DELETE
-        allow delete: if isValidId(userId) && isAdmin();
+        allow delete: if isValidId(userId) && (isAdmin() || hasPermission('view_usuarios'));
+    }
+
+    match /access_profiles/{profileId} {
+        allow read: if isSignedIn();
+        allow write: if isAdmin() || hasPermission('view_perfis');
     }
 
     match /sales/{saleId} {
@@ -93,14 +106,14 @@ service cloud.firestore {
         allow list: if isRegisteredUser();
         allow get: if isValidId(saleId) && isRegisteredUser();
 
-        // Create: Admin or Analyst can insert Excel data
-          allow create: if isValidId(saleId) && isValidSale(incoming()) && isAdmin();
+        // Create: Admin or users with db_upload or edit_atendimentos permission
+        allow create: if isValidId(saleId) && isValidSale(incoming()) && (isAdmin() || isAnalyst() || hasPermission('db_upload') || hasPermission('edit_atendimentos'));
 
-        // Update: Admin and Analyst
-        allow update: if isValidId(saleId) && isValidSale(incoming()) && (isAdmin() || isAnalyst());
+        // Update: Admin, Analyst or those with edit/override permissions
+        allow update: if isValidId(saleId) && isValidSale(incoming()) && (isAdmin() || isAnalyst() || hasPermission('edit_atendimentos') || hasPermission('override_atendimentos') || hasPermission('db_upload'));
 
-        // Delete: Only Admin
-        allow delete: if isValidId(saleId) && isAdmin();
+        // Delete: Admin or those with db_delete or clear_atendimentos
+        allow delete: if isValidId(saleId) && (isAdmin() || hasPermission('db_delete') || hasPermission('clear_atendimentos'));
     }
   }
 }
