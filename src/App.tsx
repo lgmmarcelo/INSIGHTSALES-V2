@@ -81,7 +81,7 @@ function ProtectedRoute({ children, allowedRoles, requiredAnyPermission }: { chi
 }
 
 function MainLayout({ children }: { children: React.ReactNode }) {
-  const { currentUser, userRole, userPermissions, logout } = useAuth();
+  const { currentUser, userRole, userRoleName, userDisplayName, userPermissions, logout } = useAuth();
   const location = useLocation();
 
   const navItems = [
@@ -130,8 +130,9 @@ function MainLayout({ children }: { children: React.ReactNode }) {
 
         <div className="mt-auto pt-5 border-t border-white/10 flex flex-col gap-3">
           <div>
-            <div className="text-xs font-semibold capitalize">{userRole || 'Usuário'}</div>
-            <div className="text-[11px] opacity-60 truncate">{currentUser?.email}</div>
+            <div className="text-sm font-bold capitalize truncate">{userDisplayName || userRoleName || 'Usuário'}</div>
+            <div className="text-xs font-semibold capitalize text-sky-400 mt-1">{userRoleName || userRole || 'Visualizador'}</div>
+            <div className="text-[11px] opacity-60 truncate mt-0.5">{currentUser?.email}</div>
           </div>
           <button onClick={logout} className="flex items-center gap-2 text-xs opacity-70 hover:opacity-100 hover:text-red-400 transition-colors">
             <LogOut size={14} /> Sair
