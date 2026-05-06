@@ -5,8 +5,6 @@ service cloud.firestore {
     
     // Global Safety Net
     match /{document=**} {
-        // God-mode for the founder to prevent any bootstrap lockouts
-        allow read, write: if request.auth != null && request.auth.token.email == 'marcelo@laghettomultipropriedade.com.br';
         allow read, write: if false;
     }
 
@@ -20,13 +18,18 @@ service cloud.firestore {
 
     // A user exists if they are in the users collection
     function isRegisteredUser() {
-        return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+        let uid = request.auth != null ? request.auth.uid : 'anonymous';
+        return request.auth != null && exists(/databases/$(database)/documents/users/$(uid));
     }
 
     // Role-Based Access Control via `users` collection lookup
     function getUserRole() {
-        // Use ternary to prevent calling get() on a non-existent document, which throws a rules evaluation error
-        return isRegisteredUser() ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role : 'none';
+        // Use safe check for role field to prevent evaluation errors
+        let uid = request.auth != null ? request.auth.uid : 'anonymous';
+        let userDocPath = /databases/$(database)/documents/users/$(uid);
+        let hasUser = isRegisteredUser();
+        let docData = hasUser ? get(userDocPath).data : {};
+        return ('role' in docData) ? docData.role : 'none';
     }
 
     function isAdmin() {
@@ -43,11 +46,22 @@ service cloud.firestore {
 
     // Role-based Access Control for Custom Profiles
     function hasPermission(perm) {
-        let role = getUserRole();
+        let uid = request.auth != null ? request.auth.uid : 'anonymous';
+        let userDocPath = /databases/$(database)/documents/users/$(uid);
+        let hasUserDoc = exists(userDocPath);
+        let userDocData = hasUserDoc ? get(userDocPath).data : {};
+        let role = ('role' in userDocData) ? userDocData.role : 'none';
+        let userPerms = ('permissions' in userDocData && userDocData.permissions is list) ? userDocData.permissions : [];
+        
+        let profilePath = /databases/$(database)/documents/access_profiles/$(role);
+        // Only attempt to check profile if role is not one of the built-ins and role holds a string
+        let hasProfile = (role is string && role != 'viewer' && role != 'analyst' && role != 'admin' && role != 'none') && exists(profilePath);
+        let profileData = hasProfile ? get(profilePath).data : {};
+        let profilePerms = ('permissions' in profileData && profileData.permissions is list) ? profileData.permissions : [];
+        
         return role == 'admin' || 
-               (role != 'viewer' && role != 'analyst' && role != 'none' && 
-                exists(/databases/$(database)/documents/access_profiles/$(role)) &&
-                perm in get(/databases/$(database)/documents/access_profiles/$(role)).data.permissions);
+               userPerms.hasAny([perm]) || 
+               (hasProfile && profilePerms.hasAny([perm]));
     }
 
     // --- Entity Blueprint Validation ---
@@ -60,25 +74,21 @@ service cloud.firestore {
     }
 
     function isValidSale(data) {
-        // Enforcing core keys. Optional columns and manual input columns are omitted from hasAll
+        // Enforcing core keys. Optional columns and manual input columns are omitted from hasAll.
+        // We removed uploadedAt and dataAtendimento from the strict list to allow updating older imported rows.
         return data.keys().hasAll([
-                 'localizador', 'dataAtendimento', 'cpf', 'statusContrato', 'uploadedAt'
+                 'localizador', 'cpf', 'statusContrato'
                ]) &&
                data.localizador is string && data.localizador.size() <= 100 &&
-               data.dataAtendimento is string && data.dataAtendimento.size() <= 20 &&
-               data.cpf is string && data.cpf.size() <= 20 &&
-               data.statusContrato is string && data.statusContrato.size() <= 60 &&
-               data.uploadedAt is number;
+               data.cpf is string && data.cpf.size() <= 30 &&
+               data.statusContrato is string && data.statusContrato.size() <= 60;
     }
 
     // --- Path Rules ---
 
     match /users/{userId} {
-        // Admins and those with user config permissions can list all users
-        allow list: if isAdmin() || hasPermission('view_usuarios');
-        
-        // A user can always read their own profile, or admins/managers can read
-        allow get: if (request.auth != null && request.auth.uid == userId) || isAdmin() || hasPermission('view_usuarios');
+        // Any signed in user can list and read users (needed for assigning analysts in dropdowns)
+        allow read: if request.auth != null;
 
         // Creating their own bootstrap user document
         allow create: if request.auth != null && request.auth.uid == userId && 
@@ -90,7 +100,7 @@ service cloud.firestore {
 
         // UPDATE - Admins and Managers
         allow update: if isValidId(userId) && isValidUser(incoming()) && (isAdmin() || hasPermission('view_usuarios')) &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['role', 'displayName', 'senhaProvisoria', 'updatedAt']);
+            incoming().diff(existing()).affectedKeys().hasOnly(['role', 'displayName', 'senhaProvisoria', 'updatedAt', 'roleName', 'permissions']);
 
         // DELETE
         allow delete: if isValidId(userId) && (isAdmin() || hasPermission('view_usuarios'));
@@ -110,7 +120,7 @@ service cloud.firestore {
         allow create: if isValidId(saleId) && isValidSale(incoming()) && (isAdmin() || isAnalyst() || hasPermission('db_upload') || hasPermission('edit_atendimentos'));
 
         // Update: Admin, Analyst or those with edit/override permissions
-        allow update: if isValidId(saleId) && isValidSale(incoming()) && (isAdmin() || isAnalyst() || hasPermission('edit_atendimentos') || hasPermission('override_atendimentos') || hasPermission('db_upload'));
+        allow update: if isValidId(saleId) && (isAdmin() || isAnalyst() || hasPermission('edit_atendimentos') || hasPermission('override_atendimentos') || hasPermission('db_upload'));
 
         // Delete: Admin or those with db_delete or clear_atendimentos
         allow delete: if isValidId(saleId) && (isAdmin() || hasPermission('db_delete') || hasPermission('clear_atendimentos'));

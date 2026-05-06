@@ -19,7 +19,7 @@ export const auth = getAuth(app);
 
 // Helper function to create a user without signing out the current Admin user
 // This requires a secondary App instance.
-export async function createSecondaryUser(email: string, pass: string, role: string, displayName: string) {
+export async function createSecondaryUser(email: string, pass: string, role: string, displayName: string, roleName?: string, permissions?: string[]) {
   // Check if secondary app exists
   let secondaryApp;
   if (!getApps().length || getApps().length === 1) {
@@ -36,6 +36,8 @@ export async function createSecondaryUser(email: string, pass: string, role: str
     email: email,
     role: role,
     displayName: displayName,
+    roleName: roleName || role,
+    permissions: permissions || [],
     createdAt: Date.now()
   });
 

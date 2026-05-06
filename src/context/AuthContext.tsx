@@ -42,14 +42,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           let displayName: string | null = user.displayName;
           let perms: string[] = [];
           
+          let userDocData: any = null;
           try {
             const userDoc = await getDoc(userDocRef);
             exists = userDoc.exists();
             if (exists) {
-              const data = userDoc.data();
-              role = data.role || 'viewer';
-              if (data.displayName) {
-                displayName = data.displayName;
+              userDocData = userDoc.data();
+              role = userDocData.role || 'viewer';
+              if (userDocData.displayName) {
+                displayName = userDocData.displayName;
               }
             }
           } catch (e: any) {
@@ -75,18 +76,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           } else if (exists) {
             setUserRole(role);
             let roleName = role === 'admin' ? 'Administrador' : role === 'analyst' ? 'Analista' : role === 'viewer' ? 'Visualizador' : role;
-            // Fetch permissions if custom role
-            if (role !== 'admin' && role !== 'analyst' && role !== 'viewer') {
-               try {
-                 const profileDoc = await getDoc(doc(db, 'access_profiles', role));
-                 if (profileDoc.exists()) {
-                     perms = profileDoc.data().permissions || [];
-                     roleName = profileDoc.data().name || role;
-                 }
-               } catch(err) { console.error("Error fetching permissions", err); }
-            } else if (role === 'admin') {
-               perms = ['admin_all'];
+            
+            // Check if profile details are denormalized inside user document
+            if (userDocData && userDocData.permissions && Array.isArray(userDocData.permissions)) {
+                perms = userDocData.permissions;
+                if (userDocData.roleName) {
+                    roleName = userDocData.roleName;
+                }
+            } else {
+                // Fetch permissions if custom role
+                if (role !== 'admin' && role !== 'analyst' && role !== 'viewer') {
+                   try {
+                     const cleanRoleId = role.trim();
+                     const profileDocRef = doc(db, 'access_profiles', cleanRoleId);
+                     const profileDoc = await getDoc(profileDocRef);
+                     if (profileDoc.exists()) {
+                         perms = profileDoc.data().permissions || [];
+                         roleName = profileDoc.data().name || role;
+                     } else {
+                         console.error("Profile Document does not exist for role ID:", cleanRoleId);
+                     }
+                   } catch(err: any) { 
+                     console.error("Error fetching permissions for custom role", err); 
+                   }
+                } else if (role === 'admin') {
+                   perms = ['admin_all'];
+                }
             }
+            
             setUserPermissions(perms);
             setUserRoleName(roleName);
           } else {

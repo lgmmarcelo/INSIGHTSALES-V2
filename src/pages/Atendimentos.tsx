@@ -6,7 +6,7 @@ import React, { useState, useEffect, useMemo, Fragment } from 'react';
  * NÃO ALTERAR A LÓGICA DE totals.quantVenda OU groupedSales SEM AUTORIZAÇÃO.
  */
 import { updateDoc, doc, collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { db, auth } from '../lib/firebase';
 import { useAuth } from '../context/AuthContext';
 import { parseDateLocal } from '../lib/utils';
 import { Upload, ArrowUpDown, ChevronUp, ChevronDown, ChevronRight, Search, X, Save, Check } from 'lucide-react';
@@ -35,22 +35,43 @@ export default function Atendimentos() {
   const [analysts, setAnalysts] = useState<{id: string, displayName: string, email: string}[]>([]);
 
   useEffect(() => {
+    if (!currentUser?.uid) return;
+    
     const fetchAnalysts = async () => {
       try {
-        const q = query(collection(db, 'users'), where('role', '==', 'analyst'));
+        console.log("fetchAnalysts running. currentUser is: ", currentUser.uid);
+        // Fetch all users to allow selection of custom profile users who act as analysts
+        const q = query(collection(db, 'users'));
         const snap = await getDocs(q);
-        const list = snap.docs.map(d => ({
-          id: d.id,
-          displayName: d.data().displayName || '',
-          email: d.data().email || ''
-        }));
+        const list = snap.docs
+          .map(d => ({
+            id: d.id,
+            displayName: d.data().displayName || '',
+            email: d.data().email || '',
+            role: d.data().role || '',
+            roleName: d.data().roleName || ''
+          }))
+          // Filter exactly for users that represent an analyst
+          .filter(u => 
+             u.role === 'analyst' || 
+             u.roleName?.toLowerCase().includes('analista') ||
+             u.role !== 'viewer'
+          );
+
         setAnalysts(list);
-      } catch (err) {
+      } catch (err: any) {
         console.error("Erro ao buscar analistas:", err);
+        // Explicitly format JSON error log so I can retrieve exact codes next time
+        console.error(JSON.stringify({
+          error: err.message,
+          code: err.code,
+          details: 'fetchAnalysts getDocs users collection',
+          time: new Date().toISOString()
+        }));
       }
     };
     fetchAnalysts();
-  }, []);
+  }, [currentUser?.uid]);
 
   const toggleGroup = (id: string) => {
     setExpandedGroups(prev => {

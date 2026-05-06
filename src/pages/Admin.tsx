@@ -22,7 +22,7 @@ const PERMISSIONS = [
 ];
 
 export default function Admin() {
-  const { userRole, userPermissions } = useAuth();
+  const { userRole, userPermissions, currentUser } = useAuth();
   const canViewUsers = userRole === 'admin' || userPermissions.includes('view_usuarios');
   const canViewProfiles = userRole === 'admin' || userPermissions.includes('view_perfis');
   const canResetPasswords = userRole === 'admin' || userPermissions.includes('reset_passwords');
@@ -57,9 +57,10 @@ export default function Admin() {
   const [newProfilePerms, setNewProfilePerms] = useState<string[]>([]);
 
   useEffect(() => {
+     if (!currentUser?.uid) return;
      fetchProfiles();
      fetchUsers();
-  }, []);
+  }, [currentUser?.uid]);
 
   const fetchProfiles = async () => {
       try {
@@ -124,7 +125,11 @@ export default function Admin() {
     setLoading(true);
     setSuccessMsg('');
     try {
-        await createSecondaryUser(email, password, role, displayName);
+        const selectedProfile = profiles.find(p => p.id === role);
+        const resolvedRoleName = selectedProfile ? selectedProfile.name : (role === 'admin' ? 'Administrador' : role === 'analyst' ? 'Analista' : 'Visualizador');
+        const resolvedPermissions = selectedProfile ? selectedProfile.permissions : (role === 'admin' ? ['admin_all'] : []);
+
+        await createSecondaryUser(email, password, role, displayName, resolvedRoleName, resolvedPermissions);
         setSuccessMsg(`Usuário ${displayName} criado com sucesso!`);
         setEmail('');
         setPassword('');
@@ -150,10 +155,16 @@ export default function Admin() {
       
       setLoading(true);
       try {
+          const selectedProfile = profiles.find(p => p.id === editRole);
+          const resolvedRoleName = selectedProfile ? selectedProfile.name : (editRole === 'admin' ? 'Administrador' : editRole === 'analyst' ? 'Analista' : 'Visualizador');
+          const resolvedPermissions = selectedProfile ? selectedProfile.permissions : (editRole === 'admin' ? ['admin_all'] : []);
+
           const userRef = doc(db, 'users', editingUser.id);
           const updateData: any = {
               displayName: editDisplayName,
               role: editRole,
+              roleName: resolvedRoleName,
+              permissions: resolvedPermissions,
               updatedAt: Date.now()
           };
           
